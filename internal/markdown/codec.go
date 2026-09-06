@@ -34,6 +34,8 @@ var (
 	ErrConflict = errors.New("ci-signal review report conflicts with its durable state")
 
 	stateMarkerPattern = regexp.MustCompile(`^<!-- ci-signal-state v=([0-9]+) sha256=([a-f0-9]{64}) data=([A-Za-z0-9+/]+={0,2}) -->$`)
+	categoryOrder      = []review.Category{review.CategoryBlocker, review.CategoryRisk, review.CategoryQuestion, review.CategoryInfo}
+	subcategoryOrder   = []review.Subcategory{review.SubcategorySecurity, review.SubcategoryCorrections, review.SubcategoryReliability, review.SubcategoryMaintenance, review.SubcategoryOperational, review.SubcategoryInfo}
 )
 
 // Interaction supplies host-validated provenance for a human control change.
@@ -86,27 +88,22 @@ func (c *Codec) Encode(state review.State) (string, error) {
 
 	var out strings.Builder
 	verdict := deriveVerdict(state)
-	fmt.Fprintf(&out, "## %s\n\n", verdictLabel(verdict))
+	fmt.Fprintf(&out, "## Verdict: %s\n\n", verdictLabel(verdict))
 	open, acknowledged := findingCounts(state.Findings)
-	fmt.Fprintf(&out, "**Open:** %d · **Acknowledged:** %d · **Coverage:** %s\n\n", open, acknowledged, coverageLabel(state.Runs))
-	out.WriteString("## Open findings\n\n")
+	out.WriteString("## Stats\n\n")
+	fmt.Fprintf(&out, "**Findings:** open %d · acknowledged %d\n\n", open, acknowledged)
+	fmt.Fprintf(&out, "**Assigned review units:** %s\n\n", coverageLabel(state.Runs))
+	out.WriteString("Coverage counts accepted outcomes for host-assigned review work, not tests or full-project coverage.\n\n")
+	out.WriteString("## Open\n\n")
 	if open == 0 {
 		out.WriteString("No open findings.\n")
 	} else {
-		for i := range state.Findings {
-			if state.Findings[i].State == review.FindingOpen {
-				renderFinding(&out, state.Findings[i], false)
-			}
-		}
+		renderFindingGroups(&out, state.Findings, review.FindingOpen)
 	}
 
 	if acknowledged > 0 {
 		out.WriteString("\n<details>\n<summary>Acknowledged (" + fmt.Sprint(acknowledged) + ")</summary>\n\n")
-		for i := range state.Findings {
-			if state.Findings[i].State == review.FindingAcknowledged {
-				renderFinding(&out, state.Findings[i], true)
-			}
-		}
+		renderFindingGroups(&out, state.Findings, review.FindingAcknowledged)
 		out.WriteString("</details>\n")
 	}
 
@@ -472,6 +469,36 @@ func validCoverage(value review.CoverageOutcome) bool {
 	}
 }
 
+func renderFindingGroups(out *strings.Builder, findings []review.Finding, state review.FindingState) {
+	for _, category := range categoryOrder {
+		if !containsFindingGroup(findings, state, category, "") {
+			continue
+		}
+		fmt.Fprintf(out, "### %s\n\n", categoryLabel(category))
+		for _, subcategory := range subcategoryOrder {
+			if !containsFindingGroup(findings, state, category, subcategory) {
+				continue
+			}
+			fmt.Fprintf(out, "#### %s\n\n", subcategoryLabel(subcategory))
+			for i := range findings {
+				if findings[i].State == state && findings[i].Category == category && findings[i].Subcategory == subcategory {
+					renderFinding(out, findings[i], state == review.FindingAcknowledged)
+					out.WriteByte('\n')
+				}
+			}
+		}
+	}
+}
+
+func containsFindingGroup(findings []review.Finding, state review.FindingState, category review.Category, subcategory review.Subcategory) bool {
+	for i := range findings {
+		if findings[i].State == state && findings[i].Category == category && (subcategory == "" || findings[i].Subcategory == subcategory) {
+			return true
+		}
+	}
+	return false
+}
+
 func renderFinding(out *strings.Builder, finding review.Finding, acknowledged bool) {
 	marker := findingMarker(finding.ID)
 	prefix := "- [ ] "
@@ -482,11 +509,15 @@ func renderFinding(out *strings.Builder, finding review.Finding, acknowledged bo
 			prefix = "- [x] "
 		}
 	}
-	fmt.Fprintf(out, "%s**%s · %s — %s** %s\n", prefix, categoryLabel(finding.Category), subcategoryLabel(finding.Subcategory), escape(finding.Title), marker)
+	fmt.Fprintf(out, "%s**%s** %s\n", prefix, escape(finding.Title), marker)
 	if finding.Explanation != "" {
 		fmt.Fprintf(out, "  %s\n", indentMultiline(escape(finding.Explanation), "  "))
 	}
-	fmt.Fprintf(out, "  - **Assessment:** %s\n", escape(humanize(string(finding.Assessment))))
+	assessment := escape(humanize(string(finding.Assessment)))
+	if finding.Assessment == review.AssessmentAddressed {
+		assessment = "✅ " + assessment
+	}
+	fmt.Fprintf(out, "  - **Assessment:** %s\n", assessment)
 	for _, evidence := range finding.Evidence {
 		fmt.Fprintf(out, "  - **Evidence:** %s", escape(evidence.Explanation))
 		if locations := renderLocations(evidence.Locations); locations != "" {
@@ -560,7 +591,7 @@ func verdictLabel(value review.Verdict) string {
 	if value == review.VerdictApproved {
 		return "✅ Approved"
 	}
-	return "⚠️ Needs review"
+	return "⚠️ Needs Review"
 }
 
 func deriveVerdict(state review.State) review.Verdict {
@@ -587,7 +618,7 @@ func coverageLabel(runs []review.Run) string {
 	for _, unit := range runs[len(runs)-1].Coverage {
 		counts[unit.Outcome]++
 	}
-	return fmt.Sprintf("complete %d, partial %d, failed %d, excluded %d",
+	return fmt.Sprintf("complete %d · partial %d · failed %d · excluded %d",
 		counts[review.CoverageComplete], counts[review.CoveragePartial], counts[review.CoverageFailed], counts[review.CoverageExcludedByPolicy])
 }
 

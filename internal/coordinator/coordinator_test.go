@@ -184,6 +184,7 @@ func TestZeroUnitChangeReassessesPriorFindings(t *testing.T) {
 	capture.Context.MergeRequest.DiffRefs.HeadSha = capture.Snapshot.HeadCommit
 	capture.Inventory.SnapshotID = capture.Snapshot.ID
 	capture.Inventory.Units = nil
+	capture.SourceRefs = map[review.SourceReferenceID]review.SourceReference{"fixed-source": {ID: "fixed-source", Kind: review.SourceRepositorySource, Commit: capture.Snapshot.HeadCommit}}
 
 	reviewCalls := 0
 	hooks := testHooks(capture)
@@ -199,14 +200,32 @@ func TestZeroUnitChangeReassessesPriorFindings(t *testing.T) {
 			t.Fatalf("reassessment assignment = %#v prompt=%q", request.Assignment.Findings, request.Prompt)
 		}
 		unitID := request.Units[0].ID
-		return acceptedResult("reassessed", review.Submission{
+		submission := review.Submission{
+			Findings: []review.SubmittedFinding{}, Limitations: []string{},
 			Verdict: review.VerdictApproved, Completion: review.SubmissionComplete,
 			Reassessments: []review.Reassessment{
-				{FindingID: "finding-1", Assessment: review.AssessmentAddressed, Explanation: "The Go path is fixed.", Evidence: []review.Evidence{{Explanation: "Reviewed the corrected implementation."}}, AssignedUnits: []review.ReviewUnitID{unitID}},
-				{FindingID: "finding-2", Assessment: review.AssessmentAddressed, Explanation: "Fallback handling is fixed.", Evidence: []review.Evidence{{Explanation: "Reviewed the corrected implementation."}}, AssignedUnits: []review.ReviewUnitID{unitID}},
+				{FindingID: "finding-1", Assessment: review.AssessmentAddressed, Explanation: "The Go path is fixed.", Evidence: []review.Evidence{{Explanation: "Reviewed the corrected implementation.", SourceRefs: []review.SourceReferenceID{"fixed-source"}}}, AssignedUnits: []review.ReviewUnitID{unitID}},
+				{FindingID: "finding-2", Assessment: review.AssessmentAddressed, Explanation: "Fallback handling is fixed.", Evidence: []review.Evidence{{Explanation: "Reviewed the corrected implementation.", SourceRefs: []review.SourceReferenceID{"fixed-source"}}}, AssignedUnits: []review.ReviewUnitID{unitID}},
+			},
+			AcknowledgementChanges: []review.AcknowledgementTransition{
+				{FindingID: "finding-1", Action: review.AcknowledgementActionAcknowledge, Method: review.AcknowledgementAICodeChange, Explanation: "The implementation is fixed.", SourceRefs: []review.SourceReferenceID{"fixed-source"}},
+				{FindingID: "finding-2", Action: review.AcknowledgementActionAcknowledge, Method: review.AcknowledgementAICodeChange, Explanation: "The implementation is fixed.", SourceRefs: []review.SourceReferenceID{"fixed-source"}},
 			},
 			Coverage: []review.UnitCoverage{{UnitID: unitID, Outcome: review.CoverageComplete}},
-		}), nil
+		}
+		validator, err := review.NewValidator()
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := json.Marshal(submission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		validated, err := validator.Validate(raw, request.Assignment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return acceptedResult("reassessed", validated), nil
 	}
 
 	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
@@ -217,7 +236,7 @@ func TestZeroUnitChangeReassessesPriorFindings(t *testing.T) {
 		t.Fatalf("reassessment result=%#v calls=%d", result, reviewCalls)
 	}
 	for _, finding := range result.State.Findings {
-		if finding.Assessment != review.AssessmentAddressed || len(finding.History) != 2 || finding.History[1].Kind != review.FindingEventReassessed {
+		if finding.Assessment != review.AssessmentAddressed || finding.State != review.FindingAcknowledged || finding.Acknowledgement == nil || finding.Acknowledgement.Method != review.AcknowledgementAICodeChange || len(finding.History) != 3 || finding.History[1].Kind != review.FindingEventReassessed || finding.History[2].Kind != review.FindingEventAcknowledged {
 			t.Fatalf("reassessed finding = %#v", finding)
 		}
 	}
@@ -650,4 +669,22 @@ func mustCoordinator(t *testing.T, settings config.Config, hooks Hooks) *Coordin
 	}
 	value.now = func() time.Time { return time.Unix(200, 0).UTC() }
 	return value
+}
+
+func TestKnownFindingHumanReopenConsumesOnlyPriorEvidence(t *testing.T) {
+	finding := review.Finding{ID: "finding-1", State: review.FindingOpen, History: []review.FindingEvent{
+		{Kind: review.FindingEventCreated, SourceRefs: []review.SourceReferenceID{"old-code"}},
+		{Kind: review.FindingEventAcknowledged, Method: review.AcknowledgementCheckbox, SourceRefs: []review.SourceReferenceID{"checked"}},
+		{Kind: review.FindingEventReopened, Method: review.AcknowledgementCheckbox, SourceRefs: []review.SourceReferenceID{"unchecked"}},
+		{Kind: review.FindingEventReassessed, Assessment: review.AssessmentAddressed, SourceRefs: []review.SourceReferenceID{"fixed-code"}},
+	}}
+	known := knownFinding(finding)
+	for _, id := range []review.SourceReferenceID{"old-code", "checked", "unchecked"} {
+		if _, ok := known.ConsumedSourceRefs[id]; !ok {
+			t.Fatalf("pre-reopen evidence %q was not consumed", id)
+		}
+	}
+	if _, ok := known.ConsumedSourceRefs["fixed-code"]; ok {
+		t.Fatal("evidence accepted after the human reopen was consumed")
+	}
 }

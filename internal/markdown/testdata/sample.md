@@ -1,23 +1,44 @@
-## ⚠️ Needs review
+## Verdict: ⚠️ Needs Review
 
-**Open:** 1 · **Acknowledged:** 2 · **Coverage:** complete 2, partial 0, failed 0, excluded 1
+## Stats
 
-## Open findings
+**Findings:** open 1 · acknowledged 2
 
-- [ ] **🛑 Blocker · 🐛 Corrections — Cross\-file amount regression** <!-- ci-signal-finding:Zl9vcGVu -->
+**Assigned review units:** complete 2 · partial 0 · failed 0 · excluded 1
+
+Coverage counts accepted outcomes for host-assigned review work, not tests or full-project coverage.
+
+## Open
+
+### 🛑 Blocker
+
+#### 🐛 Corrections
+
+- [ ] **Cross\-file amount regression** <!-- ci-signal-finding:Zl9vcGVu -->
   The caller now drops minor units\.
   - **Assessment:** Present
   - **Evidence:** The conversion passes a decimal into an integer API\. — internal/payments/convert\.go:24-27
 
+
 <details>
 <summary>Acknowledged (2)</summary>
 
-- [x] **⚠️ Risk · ⚙️ Operational — Retry limit is low** <!-- ci-signal-finding:Zl9odW1hbg== -->
+### ⚠️ Risk
+
+#### ⚙️ Operational
+
+- [x] **Retry limit is low** <!-- ci-signal-finding:Zl9odW1hbg== -->
   The team accepted this operating limit\.
   - **Assessment:** Present
-- 🤖 **ℹ️ Info · 📘 Info — Migration context** <!-- ci-signal-finding:Zl9haQ== -->
+
+### ℹ️ Info
+
+#### 📘 Info
+
+- 🤖 **Migration context** <!-- ci-signal-finding:Zl9haQ== -->
   A later code change addressed the original observation\.
-  - **Assessment:** Addressed
+  - **Assessment:** ✅ Addressed
+
 </details>
 
 AI-generated review. Findings and assessments may be incorrect or incomplete. ‘Approved’ is an AI reviewer verdict, not a human approval or a guarantee of correctness.

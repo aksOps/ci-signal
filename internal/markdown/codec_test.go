@@ -29,13 +29,23 @@ func TestCodecRoundTripCanonicalState(t *testing.T) {
 	}
 
 	assertOrder(t, source,
-		"## ⚠️ Needs review",
-		"**Open:** 1 · **Acknowledged:** 2 · **Coverage:** complete 2, partial 0, failed 0, excluded 1",
-		"## Open findings",
+		"## Verdict: ⚠️ Needs Review",
+		"## Stats",
+		"**Findings:** open 1 · acknowledged 2",
+		"**Assigned review units:** complete 2 · partial 0 · failed 0 · excluded 1",
+		"Coverage counts accepted outcomes for host-assigned review work, not tests or full-project coverage.",
+		"## Open",
+		"### 🛑 Blocker",
+		"#### 🐛 Corrections",
 		"<summary>Acknowledged (2)</summary>",
 		disclaimer,
 		statePrefix,
 	)
+	for _, expected := range []string{"- [ ] **Cross\\-file amount regression**", "### ⚠️ Risk", "#### ⚙️ Operational", "- [x] **Retry limit is low**", "### ℹ️ Info", "#### 📘 Info", "- 🤖 **Migration context**", "**Assessment:** ✅ Addressed"} {
+		if !strings.Contains(source, expected) {
+			t.Fatalf("rendered report missing %q:\n%s", expected, source)
+		}
+	}
 	if strings.Contains(source, string(state.Findings[0].ID)) {
 		t.Fatal("finding ID was rendered visibly")
 	}

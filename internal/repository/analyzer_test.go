@@ -260,6 +260,73 @@ func TestRepositoryEvidenceCanBeValidatedWithoutExpandingCoverage(t *testing.T) 
 	}
 }
 
+func TestCodeChangeAcknowledgementUsesFreshSnapshotEvidence(t *testing.T) {
+	fixture := newGitFixture(t)
+	analyzer := newTestAnalyzer(t, fixture.dir, 2*1024*1024)
+	ctx := context.Background()
+	at := time.Date(2026, 9, 5, 12, 0, 0, 0, time.UTC)
+	read := func(head string, capturedAt time.Time) review.SourceReference {
+		t.Helper()
+		snapshot, err := analyzer.CaptureSnapshot(ctx, fixture.base, head, capturedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		evidence, err := analyzer.ReadSource(ctx, snapshot, SideHead, "pkg/service.go", 0, 4096)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return evidence.Reference
+	}
+	old := read(fixture.base, at)
+	repeated := read(fixture.base, at.Add(time.Hour))
+	fixed := read(fixture.head, at.Add(2*time.Hour))
+	if repeated.ID != old.ID {
+		t.Fatal("recapturing unchanged code minted a new source reference")
+	}
+	if fixed.ID == old.ID || fixed.Commit == old.Commit {
+		t.Fatal("changed commit did not produce fresh source evidence")
+	}
+	assignment := review.Assignment{
+		UnitIDs:    map[review.ReviewUnitID]struct{}{"unit-1": {}},
+		Findings:   map[review.FindingID]review.KnownFinding{"finding-1": {ID: "finding-1", State: review.FindingOpen, ConsumedSourceRefs: map[review.SourceReferenceID]struct{}{old.ID: {}}}},
+		SourceRefs: map[review.SourceReferenceID]review.SourceReference{old.ID: old, fixed.ID: fixed},
+	}
+	validator, err := review.NewValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []review.SourceReference{repeated, fixed} {
+		raw := []byte(fmt.Sprintf(`{
+			"verdict":"approved","completion":"complete","findings":[],
+			"reassessments":[{"finding_id":"finding-1","assessment":"addressed","explanation":"The implementation is corrected.","evidence":[{"explanation":"Pinned implementation.","source_refs":[%q]}],"assigned_units":["unit-1"]}],
+			"acknowledgement_changes":[{"finding_id":"finding-1","action":"acknowledge","method":"ai_code_change","explanation":"The code addresses the finding.","source_refs":[%q]}],
+			"coverage":[{"unit_id":"unit-1","outcome":"complete"}],"limitations":[]
+		}`, source.ID, source.ID))
+		submission, err := validator.Validate(raw, assignment)
+		if source.ID == old.ID {
+			if err == nil || !strings.Contains(err.Error(), "already consumed") {
+				t.Fatalf("old evidence validation error = %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("fresh fixed-snapshot evidence rejected: %v", err)
+		}
+		prior := review.Finding{ID: "finding-1", State: review.FindingOpen, History: []review.FindingEvent{
+			{Kind: review.FindingEventAcknowledged, Method: review.AcknowledgementCheckbox, At: at},
+			{Kind: review.FindingEventReopened, Method: review.AcknowledgementCheckbox, At: at.Add(time.Hour)},
+		}}
+		findings, err := review.NewReconciler().Reconcile([]review.Finding{prior}, submission, review.ReconcileMetadata{RunID: "fixed", At: at.Add(2 * time.Hour)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		finding := findings[0]
+		if finding.State != review.FindingAcknowledged || finding.Assessment != review.AssessmentAddressed || finding.Acknowledgement == nil || finding.Acknowledgement.Method != review.AcknowledgementAICodeChange || finding.Acknowledgement.SourceRefs[0] != fixed.ID || len(finding.History) != 4 || finding.History[1].Kind != review.FindingEventReopened {
+			t.Fatalf("fresh acknowledgement lost state or human history: %#v", finding)
+		}
+	}
+}
+
 func TestConfiguredStructuralScanCoversFullProjectWithoutExpandingMRImpactCoverage(t *testing.T) {
 	fixture := newGitFixture(t)
 	analyzer := newTestAnalyzer(t, fixture.dir, 2*1024*1024)

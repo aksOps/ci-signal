@@ -2,6 +2,7 @@ package review
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -138,6 +139,85 @@ func TestValidatorDiscussionAcknowledgementCannotMarkFindingAddressed(t *testing
 	}`)
 	if _, err := validator.Validate(raw, testAssignmentWithFinding()); err == nil || !strings.Contains(err.Error(), "cannot mark a finding addressed") {
 		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
+func TestValidatorAddressedOpenFindingRequiresBoundCodeChangeAcknowledgement(t *testing.T) {
+	validator := mustValidator(t)
+	assignment := testAssignmentWithFinding()
+	change := assignment.SourceRefs["change-1"]
+	change.FindingID = ""
+	assignment.SourceRefs["change-1"] = change
+	assignment.SourceRefs["change-2"] = SourceReference{ID: "change-2", Kind: SourceRepositorySource}
+	base := `{
+		"verdict":"approved",
+		"completion":"complete",
+		"findings":[],
+		"reassessments":[{
+			"finding_id":"finding-1",
+			"assessment":"addressed",
+			"explanation":"The code change addresses the finding.",
+			"evidence":[{"explanation":"The corrected implementation is present.","source_refs":["change-1"]}],
+			"assigned_units":["unit-1"]
+		}],
+		"acknowledgement_changes":%s,
+		"coverage":[{"unit_id":"unit-1","outcome":"complete"}],
+		"limitations":[]
+	}`
+
+	if _, err := validator.Validate([]byte(fmt.Sprintf(base, `[]`)), assignment); err == nil || !strings.Contains(err.Error(), "requires an ai_code_change acknowledgement") {
+		t.Fatalf("missing acknowledgement error = %v", err)
+	}
+	paired := `[{
+		"finding_id":"finding-1",
+		"action":"acknowledge",
+		"method":"ai_code_change",
+		"explanation":"The accepted code evidence addresses the finding.",
+		"source_refs":["change-1"]
+	}]`
+	if _, err := validator.Validate([]byte(fmt.Sprintf(base, paired)), assignment); err != nil {
+		t.Fatalf("paired code-change acknowledgement rejected: %v", err)
+	}
+	unbound := strings.Replace(paired, `"change-1"`, `"change-2"`, 1)
+	if _, err := validator.Validate([]byte(fmt.Sprintf(base, unbound)), assignment); err == nil || !strings.Contains(err.Error(), "addressed reassessment evidence") {
+		t.Fatalf("unbound acknowledgement error = %v", err)
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*SourceReference, *KnownFinding)
+		want   string
+	}{
+		{"foreign finding", func(source *SourceReference, _ *KnownFinding) { source.FindingID = "other-finding" }, "associated with finding"},
+		{"host consumed", func(source *SourceReference, _ *KnownFinding) { source.Consumed = true }, "already consumed"},
+		{"finding consumed", func(_ *SourceReference, known *KnownFinding) {
+			known.ConsumedSourceRefs = map[SourceReferenceID]struct{}{"change-1": {}}
+		}, "already consumed"},
+		{"discussion as code", func(source *SourceReference, _ *KnownFinding) {
+			source.Kind = SourceGitLabDiscussion
+			source.Human = true
+		}, "repository change evidence"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := testAssignmentWithFinding()
+			source := candidate.SourceRefs["change-1"]
+			source.FindingID = ""
+			known := candidate.Findings["finding-1"]
+			test.mutate(&source, &known)
+			candidate.SourceRefs["change-1"] = source
+			candidate.Findings["finding-1"] = known
+			if _, err := validator.Validate([]byte(fmt.Sprintf(base, paired)), candidate); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+
+	known := assignment.Findings["finding-1"]
+	known.State = FindingAcknowledged
+	known.Acknowledgement = &Acknowledgement{Method: AcknowledgementCheckbox}
+	assignment.Findings["finding-1"] = known
+	if _, err := validator.Validate([]byte(fmt.Sprintf(base, `[]`)), assignment); err != nil {
+		t.Fatalf("addressed human-acknowledged finding required replacement acknowledgement: %v", err)
 	}
 }
 

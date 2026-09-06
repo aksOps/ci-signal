@@ -468,8 +468,16 @@ func referencedSourceRecords(findings []review.Finding, available []review.Sourc
 
 func knownFinding(finding review.Finding) review.KnownFinding {
 	consumed := make(map[review.SourceReferenceID]struct{})
-	for _, event := range finding.History {
-		if event.Kind == review.FindingEventAcknowledged {
+	// A human reversal invalidates evidence already recorded for this finding.
+	// Later source references can support a new acknowledgement.
+	lastHumanReopen := -1
+	for i, event := range finding.History {
+		if event.Kind == review.FindingEventReopened && event.Method == review.AcknowledgementCheckbox {
+			lastHumanReopen = i
+		}
+	}
+	for i, event := range finding.History {
+		if event.Kind == review.FindingEventAcknowledged || i <= lastHumanReopen {
 			for _, source := range event.SourceRefs {
 				consumed[source] = struct{}{}
 			}

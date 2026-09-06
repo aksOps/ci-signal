@@ -126,7 +126,7 @@ func validateSubmission(submission Submission, assignment Assignment) error {
 		}
 	}
 
-	transitions := make(map[FindingID]struct{}, len(submission.AcknowledgementChanges))
+	transitions := make(map[FindingID]AcknowledgementTransition, len(submission.AcknowledgementChanges))
 	for i, transition := range submission.AcknowledgementChanges {
 		known, ok := assignment.Findings[transition.FindingID]
 		if !ok {
@@ -135,11 +135,12 @@ func validateSubmission(submission Submission, assignment Assignment) error {
 		if _, duplicate := transitions[transition.FindingID]; duplicate {
 			return fmt.Errorf("acknowledgement change %d duplicates finding %q", i, transition.FindingID)
 		}
-		transitions[transition.FindingID] = struct{}{}
+		transitions[transition.FindingID] = transition
 		if transition.Method == AcknowledgementCheckbox {
 			return fmt.Errorf("acknowledgement change %d claims host-only checkbox method", i)
 		}
-		if err := validateTransitionEvidence(transition, known, assignment.SourceRefs); err != nil {
+		reassessment, reassessed := reassessments[transition.FindingID]
+		if err := validateTransitionEvidence(transition, known, reassessment, reassessed, assignment.SourceRefs); err != nil {
 			return fmt.Errorf("acknowledgement change %d: %w", i, err)
 		}
 		if reassessment, ok := reassessments[transition.FindingID]; ok && reassessment.Assessment == AssessmentAddressed && transition.Method != AcknowledgementAICodeChange {
@@ -161,6 +162,16 @@ func validateSubmission(submission Submission, assignment Assignment) error {
 			if !ok || (reassessment.Assessment != AssessmentPresent && reassessment.Assessment != AssessmentUnknown) {
 				return fmt.Errorf("acknowledgement change %d reopen requires an explicit present or unknown reassessment", i)
 			}
+		}
+	}
+	for findingID, reassessment := range reassessments {
+		known := assignment.Findings[findingID]
+		if known.State != FindingOpen || reassessment.Assessment != AssessmentAddressed {
+			continue
+		}
+		transition, ok := transitions[findingID]
+		if !ok || transition.Action != AcknowledgementActionAcknowledge || transition.Method != AcknowledgementAICodeChange {
+			return fmt.Errorf("addressed open finding %q requires an ai_code_change acknowledgement", findingID)
 		}
 	}
 	return nil
@@ -266,7 +277,15 @@ func validateLocation(location Location) error {
 	return nil
 }
 
-func validateTransitionEvidence(transition AcknowledgementTransition, known KnownFinding, sources map[SourceReferenceID]SourceReference) error {
+func validateTransitionEvidence(transition AcknowledgementTransition, known KnownFinding, reassessment Reassessment, reassessed bool, sources map[SourceReferenceID]SourceReference) error {
+	reassessmentSources := make(map[SourceReferenceID]struct{})
+	if reassessed {
+		for _, evidence := range reassessment.Evidence {
+			for _, sourceID := range evidence.SourceRefs {
+				reassessmentSources[sourceID] = struct{}{}
+			}
+		}
+	}
 	for _, id := range transition.SourceRefs {
 		source, ok := sources[id]
 		if !ok {
@@ -278,17 +297,30 @@ func validateTransitionEvidence(transition AcknowledgementTransition, known Know
 		if _, consumed := known.ConsumedSourceRefs[id]; consumed {
 			return fmt.Errorf("source %q was already consumed for finding %q", id, transition.FindingID)
 		}
-		if source.FindingID != transition.FindingID {
-			return fmt.Errorf("source %q is not associated with finding %q", id, transition.FindingID)
-		}
 		switch transition.Method {
 		case AcknowledgementAIDiscussion:
+			if source.FindingID != transition.FindingID {
+				return fmt.Errorf("source %q is not associated with finding %q", id, transition.FindingID)
+			}
 			if (source.Kind != SourceGitLabDiscussion && source.Kind != SourceGitLabNote) || !source.Human {
 				return fmt.Errorf("source %q is not a relevant human discussion response", id)
 			}
 		case AcknowledgementAICodeChange:
 			if source.Kind != SourceRepositoryDiff && source.Kind != SourceRepositorySource && source.Kind != SourceRepositoryAST {
 				return fmt.Errorf("source %q is not repository change evidence", id)
+			}
+			if source.FindingID != "" && source.FindingID != transition.FindingID {
+				return fmt.Errorf("source %q is associated with finding %q, not %q", id, source.FindingID, transition.FindingID)
+			}
+			if transition.Action == AcknowledgementActionAcknowledge {
+				if !reassessed || reassessment.Assessment != AssessmentAddressed {
+					return errors.New("code-change acknowledgement requires an addressed reassessment")
+				}
+				if _, ok := reassessmentSources[id]; !ok {
+					return fmt.Errorf("source %q is not cited by the addressed reassessment evidence", id)
+				}
+			} else if source.FindingID != transition.FindingID {
+				return fmt.Errorf("source %q is not associated with finding %q", id, transition.FindingID)
 			}
 		default:
 			return fmt.Errorf("unsupported AI acknowledgement method %q", transition.Method)
