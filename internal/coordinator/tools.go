@@ -2,8 +2,10 @@ package coordinator
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"unicode/utf8"
 
 	"ci-signal/internal/config"
 	"ci-signal/internal/copilot"
@@ -57,7 +59,7 @@ func repositoryTools(analyzer *repository.Analyzer, snapshot repository.Snapshot
 					return sdk.ToolResult{}, err
 				}
 			}
-			return marshalToolResult(value)
+			return marshalEvidenceChunk(value)
 		}),
 		tool("git_read", "Read a bounded diff for one literal path", properties("path", "offset"), []string{"path", "offset"}, func(inv sdk.ToolInvocation) (sdk.ToolResult, error) {
 			var args diffArgs
@@ -71,7 +73,7 @@ func repositoryTools(analyzer *repository.Analyzer, snapshot repository.Snapshot
 			if err := registry.RegisterSource(value.Reference); err != nil {
 				return sdk.ToolResult{}, err
 			}
-			return marshalToolResult(value)
+			return marshalEvidenceChunk(value)
 		}),
 		tool("repository_search", "Search pinned repository source with bounded output", properties("side", "query", "paths", "offset"), []string{"side", "query", "paths", "offset"}, func(inv sdk.ToolInvocation) (sdk.ToolResult, error) {
 			var args searchArgs
@@ -85,7 +87,7 @@ func repositoryTools(analyzer *repository.Analyzer, snapshot repository.Snapshot
 			if err := registry.RegisterSource(value.Reference); err != nil {
 				return sdk.ToolResult{}, err
 			}
-			return marshalToolResult(value)
+			return marshalEvidenceChunk(value)
 		}),
 		tool("ast_grep", "Extract Go declarations from one pinned source blob", properties("side", "path"), []string{"side", "path"}, func(inv sdk.ToolInvocation) (sdk.ToolResult, error) {
 			var args astArgs
@@ -101,7 +103,7 @@ func repositoryTools(analyzer *repository.Analyzer, snapshot repository.Snapshot
 			}
 			return marshalToolResult(value)
 		}),
-		tool("structural_scan", "Run a configured structural rule across every eligible file in the pinned source-head tree", properties("name", "after_path"), []string{"name"}, func(inv sdk.ToolInvocation) (sdk.ToolResult, error) {
+		tool("structural_scan", "Locate configured structural rule matches across eligible source-head files; returns metadata only, retrieve source with repository_read", properties("name", "after_path"), []string{"name"}, func(inv sdk.ToolInvocation) (sdk.ToolResult, error) {
 			var args structuralScanArgs
 			if err := decodeToolArgs(inv.Arguments, &args); err != nil {
 				return sdk.ToolResult{}, err
@@ -123,7 +125,7 @@ func repositoryTools(analyzer *repository.Analyzer, snapshot repository.Snapshot
 			if err := registry.RegisterSource(value.Reference); err != nil {
 				return sdk.ToolResult{}, err
 			}
-			return marshalToolResult(value)
+			return marshalStructuralScan(value)
 		}),
 	}
 	allow := make(map[string]struct{}, len(allowed))
@@ -171,4 +173,43 @@ func decodeToolArgs(input any, output any) error {
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(output)
+}
+
+func marshalEvidenceChunk(value repository.EvidenceChunk) (sdk.ToolResult, error) {
+	// Keep byte offsets and references exact while making ordinary source readable.
+	// Binary bytes and UTF-8 split at a chunk boundary retain a lossless encoding.
+	data, encoding := string(value.Chunk.Data), "utf-8"
+	if !utf8.Valid(value.Chunk.Data) {
+		data, encoding = base64.StdEncoding.EncodeToString(value.Chunk.Data), "base64"
+	}
+	var result struct {
+		Chunk struct {
+			repository.Chunk
+			Data     string `json:"data"`
+			Encoding string `json:"encoding"`
+		} `json:"chunk"`
+		Reference review.SourceReference `json:"source_reference"`
+	}
+	result.Chunk.Chunk = value.Chunk
+	result.Chunk.Data, result.Chunk.Encoding = data, encoding
+	result.Reference = value.Reference
+	return marshalToolResult(result)
+}
+
+func marshalStructuralScan(value repository.StructuralScanEvidence) (sdk.ToolResult, error) {
+	type location struct {
+		Path         string `json:"path"`
+		StartLine    int    `json:"start_line"`
+		EndLine      int    `json:"end_line"`
+		MatchedBytes int    `json:"matched_bytes"`
+	}
+	locations := make([]location, 0, len(value.Matches))
+	for _, match := range value.Matches {
+		locations = append(locations, location{match.Path, match.StartLine, match.EndLine, len(match.Text)})
+	}
+	return marshalToolResult(struct {
+		repository.StructuralScanEvidence
+		Matches        []location `json:"matches"`
+		ContentOmitted bool       `json:"content_omitted"`
+	}{value, locations, true})
 }

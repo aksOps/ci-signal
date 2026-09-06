@@ -27,6 +27,19 @@ docker run --rm --entrypoint /bin/sh "$image" -ceu '
   echo "79f649256bdb76f448c6804cc7165eea3ba90b7773ace6758aeb77518125fbd8  $(dirname "$COPILOT_CLI_PATH")/runtime.node" | sha256sum -c -
   echo "b9680937e10425bf19862908856c16ed274e6b81a1368bd62be7a757eab21628  /opt/copilot/LICENSE.md" | sha256sum -c -
   echo "7a5ab30160186184c0bf8bffc87da4af25123c183964cd98c11b0b354137db0a  /usr/local/bin/ast-grep" | sha256sum -c -
+  echo "64c01578fec180a1b1f093e882bc8a673f0a3bf7ecf7094950fec6d897872e01  /usr/local/bin/rtk" | sha256sum -c -
+  echo "4044ade9c21d8b084d3d16a03375cf3b7e166b946a327bb37a3fbbdb53287cfd  /opt/licenses/rtk.LICENSE" | sha256sum -c -
+  rtk --version | grep -Fx "rtk 0.48.0"
+  test ! -w /usr/local/bin/rtk
+  test ! -w /opt/ci-signal/rtk
+  for file in hooks/rtk-rewrite.json copilot-instructions.md; do
+    test -r "/opt/ci-signal/rtk/$file"
+    test ! -w "/opt/ci-signal/rtk/$file"
+    test -w "$HOME/.copilot/$file"
+    cmp "/opt/ci-signal/rtk/$file" "$HOME/.copilot/$file"
+    test ! -e "/var/lib/ci-signal/copilot/$file"
+  done
+  grep -F "rtk hook copilot" "$HOME/.copilot/hooks/rtk-rewrite.json"
   git --version | grep -F "git version 2.39.5"
   ast-grep --version | grep -Fx "ast-grep 0.45.3"
 '

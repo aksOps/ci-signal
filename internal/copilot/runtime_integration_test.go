@@ -223,8 +223,12 @@ func TestEnginePinnedCLIRuntimeContract(t *testing.T) {
 	})
 
 	fixture := newFixture(t)
+	if home := os.Getenv("CI_SIGNAL_TEST_IMAGE_HOME"); home != "" {
+		fixture.config.Copilot.HomeDir = home
+	}
 	fixture.config.Limits.SessionTimeout = config.Duration(30 * time.Second)
-	fixture.config.Limits.MaxInputTokens = 4096
+	fixture.config.Limits.MaxInputTokens = 0
+	fixture.config.Limits.MaxOutputTokens = 0
 	engine := fixture.engine(t, sdkRuntimeFactory{}, nil)
 	engine.config.Copilot.Provider.Endpoint = "http://" + listener.Addr().String() + "/v1"
 	engine.config.Copilot.Provider.Model = "fixture-model"
@@ -237,6 +241,11 @@ func TestEnginePinnedCLIRuntimeContract(t *testing.T) {
 	}
 	if result.Accepted == nil || result.Accepted.Value.Completion != "complete" {
 		t.Fatalf("accepted submission = %#v", result.Accepted)
+	}
+	for _, name := range []string{"copilot-instructions.md", "hooks/rtk-rewrite.json"} {
+		if _, err := os.Stat(filepath.Join(fixture.config.Copilot.HomeDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("isolated reviewer home inherited global RTK configuration: %s", name)
+		}
 	}
 	if len(result.Telemetry.ObservedModels) != 1 || result.Telemetry.ObservedModels[0].Model != "fixture-model" || !result.Telemetry.UsageComplete {
 		t.Fatalf("runtime telemetry = %#v", result.Telemetry)
@@ -259,6 +268,11 @@ func (s *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *http.R
 	_, _ = io.Copy(io.Discard, io.LimitReader(request.Body, 2<<20))
 	s.mu.Lock()
 	s.calls++
+	if s.calls > 3 {
+		s.mu.Unlock()
+		http.Error(writer, "local fixture expected a completed submission within three requests", http.StatusBadRequest)
+		return
+	}
 	token := s.token
 	if token == "" {
 		token = "fixture-token"

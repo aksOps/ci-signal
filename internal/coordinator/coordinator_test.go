@@ -522,6 +522,18 @@ func TestFingerprintIncludesReviewBudgetsButExcludesDiagnosticsAndLabels(t *test
 		t.Fatal("session budget did not change review fingerprint")
 	}
 	settings.Limits.MaxSessions--
+	for _, budget := range []*uint64{&settings.Limits.MaxInputTokens, &settings.Limits.MaxOutputTokens} {
+		previous := *budget
+		*budget = 0
+		changed, err := Fingerprint(capture, settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed == baseline {
+			t.Fatal("disabling token budget did not change review fingerprint")
+		}
+		*budget = previous
+	}
 	settings.Diagnostics.LogLevel = config.LogDebug
 	settings.Labels.Static = []string{"ai-review::configured"}
 	incidental, err := Fingerprint(capture, settings)

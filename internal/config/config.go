@@ -296,12 +296,6 @@ func (c *Config) applyDefaults() {
 	if c.Limits.MaxReportBytes == 0 {
 		c.Limits.MaxReportBytes = 900 * 1024
 	}
-	if c.Limits.MaxInputTokens == 0 {
-		c.Limits.MaxInputTokens = 200_000
-	}
-	if c.Limits.MaxOutputTokens == 0 {
-		c.Limits.MaxOutputTokens = 32_000
-	}
 	if c.Review.Scope == "" {
 		c.Review.Scope = review.ScopeMRImpact
 	}
@@ -471,9 +465,6 @@ func validateLimits(value Limits) error {
 	}
 	if value.MaxConcurrency > 32 {
 		return errors.New("limits.max_concurrency cannot exceed 32")
-	}
-	if value.MaxInputTokens == 0 || value.MaxOutputTokens == 0 {
-		return errors.New("review token budgets must be positive")
 	}
 	return nil
 }

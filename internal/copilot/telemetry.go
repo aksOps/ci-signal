@@ -97,7 +97,7 @@ func (c *eventCollector) handle(event sdk.SessionEvent) {
 			TotalTokens:  input + output,
 			Cumulative:   false,
 		})
-		if c.inputTokens > c.maxInput || c.outputTokens > c.maxOutput {
+		if c.maxInput > 0 && c.inputTokens > c.maxInput || c.maxOutput > 0 && c.outputTokens > c.maxOutput {
 			c.fail(fmt.Errorf("reported token usage exceeds host budget: input=%d/%d output=%d/%d", c.inputTokens, c.maxInput, c.outputTokens, c.maxOutput))
 		}
 	case *sdk.SessionUsageCheckpointData:

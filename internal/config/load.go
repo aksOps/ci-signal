@@ -48,7 +48,8 @@ func LoadFromEnvironment(lookup LookupEnv) (Loaded, error) {
 	if err != nil {
 		return Loaded{}, fmt.Errorf("read reviewer config: %w", err)
 	}
-	var result Config
+	// Seed only omitted token settings. Explicit zero disables that budget.
+	result := Config{Limits: Limits{MaxInputTokens: 200_000, MaxOutputTokens: 32_000}}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&result); err != nil {

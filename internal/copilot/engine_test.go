@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -101,6 +102,9 @@ func TestEngineRunUsesPinnedBYOKAndAcceptsStructuredSubmission(t *testing.T) {
 	provider := sessionConfig.Provider
 	if provider == nil || provider.Type != "openai" || provider.WireAPI != "responses" || provider.BaseURL != config.OllamaCloudEndpoint || provider.ModelID != config.OllamaCloudModel || provider.WireModel != config.OllamaCloudModel || provider.BearerToken != "provider-secret" {
 		t.Fatalf("provider config = %#v", provider)
+	}
+	if provider.MaxPromptTokens != 1000 || provider.MaxOutputTokens != 1000 {
+		t.Fatal("positive provider token settings were lost")
 	}
 	if sessionConfig.Model != config.OllamaCloudModel || len(sessionConfig.Providers) != 0 || len(sessionConfig.Models) != 0 || sessionConfig.GitHubToken != "" {
 		t.Fatalf("session could use an alternate provider or model: %#v", sessionConfig)
@@ -454,6 +458,8 @@ func TestDiagnosticsProtectExistingLogFile(t *testing.T) {
 
 func TestTelemetryRejectsModelOrAuthenticationFallbackAndDeduplicatesUsage(t *testing.T) {
 	fixture := newFixture(t)
+	fixture.config.Limits.MaxInputTokens = 0
+	fixture.config.Limits.MaxOutputTokens = 0
 	t.Run("model mismatch", func(t *testing.T) {
 		session := &fakeSession{
 			loadedSkills:  []skillInfo{{Name: "core-review", Path: filepath.Join(fixture.coreSkills, "core-review", "SKILL.md")}},
@@ -518,6 +524,59 @@ func TestTelemetryRejectsModelOrAuthenticationFallbackAndDeduplicatesUsage(t *te
 			t.Fatalf("usage = %#v", result.Telemetry.Usage)
 		}
 	})
+}
+
+func TestDisabledTokenBudgetsOmitProviderCapsAndRetainTelemetry(t *testing.T) {
+	fixture := newFixture(t)
+	fixture.config.Limits.MaxInputTokens = 0
+	fixture.config.Limits.MaxOutputTokens = 0
+	session := &fakeSession{
+		loadedSkills:  []skillInfo{{Name: "core-review", Path: filepath.Join(fixture.coreSkills, "core-review", "SKILL.md")}},
+		invokedSkills: []string{"core-review"}, submissions: []any{completeSubmission()},
+		emitTelemetry: true, duplicateUsage: true, telemetryBeforeSubmission: true,
+	}
+	factory := &fakeRuntimeFactory{runtime: &fakeRuntime{version: CLIVersion, session: session}}
+	engine := fixture.engine(t, factory, nil)
+	result, err := engine.Run(context.Background(), fixture.request())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Accepted == nil || !result.Telemetry.UsageComplete || len(result.Telemetry.Usage) != 1 || result.Telemetry.Usage[0].InputTokens != 10 || result.Telemetry.Usage[0].OutputTokens != 5 {
+		t.Fatalf("accepted review or telemetry lost: %#v", result)
+	}
+	raw, err := json.Marshal(factory.runtime.created.Provider)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "maxPromptTokens") || strings.Contains(string(raw), "maxOutputTokens") {
+		t.Fatal("disabled token caps were sent to provider")
+	}
+}
+
+func TestTokenBudgetsEnforceOnlyPositiveCumulativeLimits(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		input, output uint64
+		wantFailure   bool
+	}{
+		{"disabled", 0, 0, false}, {"input", 15, 0, true}, {"output", 0, 7, true}, {"equal", 20, 10, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			canceled := false
+			collector := newEventCollector("session", config.OllamaCloudModel, nil, config.Limits{MaxInputTokens: test.input, MaxOutputTokens: test.output}, config.Diagnostics{}, nil, func() { canceled = true })
+			input, output, byok := int64(10), int64(5), true
+			for _, id := range []string{"call1", "call1", "call2"} {
+				collector.handle(sdk.SessionEvent{ID: id, Data: &sdk.AssistantUsageData{APICallID: &id, Model: config.OllamaCloudModel, IsByok: &byok, InputTokens: &input, OutputTokens: &output}})
+			}
+			if canceled != test.wantFailure || (collector.integrityError() != nil) != test.wantFailure {
+				t.Fatalf("canceled=%v error=%v", canceled, collector.integrityError())
+			}
+			telemetry := collector.telemetry()
+			if !telemetry.UsageComplete || len(telemetry.Usage) != 2 || collector.inputTokens != 20 || collector.outputTokens != 10 {
+				t.Fatalf("usage was lost or duplicated: %#v", telemetry)
+			}
+		})
+	}
 }
 
 type fixture struct {

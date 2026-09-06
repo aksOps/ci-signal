@@ -219,6 +219,55 @@ func mapLookup(values map[string]string) LookupEnv {
 	}
 }
 
+func TestLoadTokenBudgetsDefaultOnlyWhenOmitted(t *testing.T) {
+	for _, test := range []struct {
+		name, limits  string
+		input, output uint64
+		invalid       bool
+	}{
+		{name: "omitted", limits: `{}`, input: 200000, output: 32000},
+		{name: "disabled", limits: `{"max_input_tokens":0,"max_output_tokens":0}`},
+		{name: "input disabled", limits: `{"max_input_tokens":0}`, output: 32000},
+		{name: "positive", limits: `{"max_input_tokens":123,"max_output_tokens":456}`, input: 123, output: 456},
+		{name: "negative input", limits: `{"max_input_tokens":-1}`, invalid: true},
+		{name: "negative output", limits: `{"max_output_tokens":-1}`, invalid: true},
+		{name: "unknown limit", limits: `{"unknown":1}`, invalid: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := writeConfig(t, validConfig(t))
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document map[string]json.RawMessage
+			if err := json.Unmarshal(raw, &document); err != nil {
+				t.Fatal(err)
+			}
+			document["limits"] = json.RawMessage(test.limits)
+			raw, err = json.Marshal(document)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			loaded, err := LoadFromEnvironment(mapLookup(map[string]string{"REVIEWER_CONFIG_FILE": path, "GITLAB_API_TOKEN": "api", "OLLAMA_API_KEY": "provider"}))
+			if test.invalid {
+				if err == nil {
+					t.Fatal("invalid limits accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if loaded.Config.Limits.MaxInputTokens != test.input || loaded.Config.Limits.MaxOutputTokens != test.output {
+				t.Fatalf("token budgets = %d/%d, want %d/%d", loaded.Config.Limits.MaxInputTokens, loaded.Config.Limits.MaxOutputTokens, test.input, test.output)
+			}
+		})
+	}
+}
+
 func TestRepositoryExcludedPathsAreLiteralAndBounded(t *testing.T) {
 	settings := validConfig(t)
 	settings.applyDefaults()

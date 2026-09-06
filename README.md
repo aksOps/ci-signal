@@ -21,6 +21,8 @@ Every Copilot session receives that provider and model explicitly. Stored-user a
 
 The supported build uses Go language level 1.25 with toolchain 1.26.5. Do not build or run checks with a newer Go version.
 
+The image includes RTK 0.48.0 and its global Copilot configuration in `$HOME/.copilot` for direct Copilot CLI sessions. The SDK reviewer uses `/var/lib/ci-signal/copilot` and isolated session subdirectories instead. The pinned CLI's global RTK hook interferes with native tool dispatch even when file hooks are disabled, so reviewer homes do not inherit it. Native repository handlers return bounded readable results directly and do not pass through RTK.
+
 ## Configuration
 
 Set `REVIEWER_CONFIG_FILE` to an absolute path to a host-controlled JSON file. The loader rejects unknown fields, trailing JSON values, invalid enum values, conflicting labels, and unsupported provider settings. Relative paths inside the document resolve from the configuration file's directory, so the packaged [example configuration](examples/reviewer.json) works independently of the launch directory.
@@ -73,6 +75,10 @@ Sensitive diagnostic content is off by default. Tool calls, tool results, and ru
 Initial structural extraction supports Go with the pinned ast-grep rule. Configured structural scans can cover the whole eligible project in either review scope, but they do not mark every project unit as assessed. Deleted declarations use base content, additions use head content, and renames preserve both paths. Unsupported languages, generated or vendor exclusions, extraction failures, and oversized content receive explicit fallback or exclusion coverage. AST matches are candidates for investigation rather than proven semantic dependencies.
 
 Large worklists are grouped into bounded sessions using `max_units_per_session`, `max_sessions`, `max_concurrency`, session and overall timeouts, byte limits, and input/output token budgets. Each batch can retrieve repository-wide evidence. Multi-batch work adds an integration unit. Compatible accepted checkpoints are reused only for an identical relevant fingerprint and assignment; they are local recovery data, not published history. Any unassessed, failed, stale, or budget-exhausted work produces partial coverage and cannot produce an approved verdict.
+
+Set `limits.max_input_tokens` or `limits.max_output_tokens` to `0` to disable that session token budget. Omitted settings retain the defaults of 200,000 input and 32,000 output tokens. Usage telemetry continues when budgets are disabled. Input usage is the sum of provider calls, including context sent again on later calls; it is not the size of the repository or a single prompt. Positive budgets cancel the session after reported cumulative usage exceeds a cap, so they can overshoot by a model call. Provider token settings are omitted when disabled; the provider's own context and response limits still apply. Timeouts, concurrency, and tool byte limits remain separate controls.
+
+The starting prompt contains assignment metadata and merge-request context. Source, per-file diffs, and search matches are retrieved on demand as bounded UTF-8 text. Binary bytes or chunks that split a UTF-8 character use an explicit lossless base64 encoding. AST declaration extraction returns names and locations. Configured structural scans return match locations and byte counts with `content_omitted: true`; the reviewer must retrieve relevant source bodies separately. Scan completeness does not count as source retrieval or AI coverage.
 
 ## Skills, instructions, and tools
 
