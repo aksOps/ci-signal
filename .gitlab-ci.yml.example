@@ -1,0 +1,43 @@
+# Keep AI_REVIEWER_TRUSTED, GITLAB_API_TOKEN, OLLAMA_API_KEY, and the
+# reviewer credentials protected. This example deliberately skips
+# fork merge requests. Set the protected AI_REVIEWER_PUBLISH variable to true
+# only after dry-run output has been reviewed.
+ai_gitlab_review:
+  stage: test
+  image:
+    # Configure AI_REVIEWER_IMAGE as an immutable image reference with a digest.
+    name: "$AI_REVIEWER_IMAGE"
+    entrypoint: [""]
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_PROJECT_ID == $CI_PROJECT_ID && $AI_REVIEWER_TRUSTED == "true"'
+  resource_group: "ai-review-${CI_PROJECT_ID}-${CI_MERGE_REQUEST_IID}"
+  interruptible: true
+  timeout: 30m
+  variables:
+    REVIEW_PROJECT_DIR: "$CI_PROJECT_DIR"
+    REVIEWER_GITLAB_BASE_URL: "$CI_SERVER_URL"
+    REVIEWER_GITLAB_PROJECT: "$CI_PROJECT_ID"
+    REVIEWER_GITLAB_MR_IID: "$CI_MERGE_REQUEST_IID"
+    REVIEWER_COPILOT_HOME: "/var/lib/ci-signal/copilot"
+    REVIEWER_STATE_DIR: "/var/lib/ci-signal/state"
+    REVIEWER_CONFIG_FILE: "/opt/ci-signal/examples/reviewer.json"
+  script:
+    - |
+      : "${CI_JOB_TOKEN:?GitLab must inject CI_JOB_TOKEN}"
+      : "${GITLAB_API_TOKEN:?configure a protected masked GitLab API token}"
+      : "${OLLAMA_API_KEY:?configure a protected masked Ollama Cloud API key}"
+      if [ "${AI_REVIEWER_PUBLISH:-false}" = "true" ]; then
+        export REVIEWER_DRY_RUN=false
+      else
+        export REVIEWER_DRY_RUN=true
+      fi
+      install -d -m 0700 "$CI_PROJECT_DIR/.ci-signal/diagnostics"
+      /usr/local/bin/ci-signal \
+        --log-level=info \
+        --log-file="$CI_PROJECT_DIR/.ci-signal/diagnostics/reviewer.jsonl"
+  artifacts:
+    when: always
+    access: maintainer
+    expire_in: 3 days
+    paths:
+      - .ci-signal/diagnostics/

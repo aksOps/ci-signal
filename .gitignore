@@ -1,0 +1,8 @@
+/ci-signal
+.ci-signal/
+.env
+.env.*
+*.key
+*.pem
+*.p12
+*.pfx

@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "gitlab": {
+    "base_url": "https://gitlab.example.com",
+    "project": "group/project",
+    "mr_iid": 1,
+    "job_token_env": "CI_JOB_TOKEN",
+    "api_token_env": "GITLAB_API_TOKEN"
+  },
+  "repository": {
+    "project_dir": "/workspace"
+  },
+  "copilot": {
+    "provider": {
+      "name": "ollama_cloud",
+      "type": "openai",
+      "endpoint": "https://ollama.com/v1",
+      "model": "deepseek-v4-flash:cloud",
+      "credential_env": "OLLAMA_API_KEY",
+      "wire_api": "responses"
+    },
+    "home_dir": "/var/lib/ci-signal/copilot",
+    "state_dir": "/var/lib/ci-signal/state"
+  },
+  "guidance": {
+    "core_skill_dirs": ["../core/skills"],
+    "core_instruction_dirs": ["../core/instructions"],
+    "project_skill_dirs": [],
+    "review_prompt_file": "../core/prompts/review.md",
+    "required_skills": ["review", "ast-analysis"],
+    "reserved_skill_names": ["review", "ast-analysis"]
+  },
+  "limits": {
+    "overall_timeout": "30m",
+    "session_timeout": "10m",
+    "tool_timeout": "30s",
+    "api_timeout": "30s",
+    "max_concurrency": 2,
+    "max_sessions": 8,
+    "max_correction_attempts": 2,
+    "max_units_per_session": 20,
+    "max_source_bytes": 262144,
+    "max_diff_bytes": 524288,
+    "max_tool_output_bytes": 262144,
+    "max_report_bytes": 921600,
+    "max_input_tokens": 200000,
+    "max_output_tokens": 32000
+  },
+  "review": {
+    "scope": "mr_impact",
+    "gating_categories": ["blocker", "risk", "question"],
+    "exit_policy": "incomplete_nonzero"
+  },
+  "tools": {
+    "git_path": "git",
+    "ast_grep_path": "ast-grep",
+    "structural_scans": [
+      {
+        "name": "go-declarations",
+        "language": "go",
+        "rule_path": "../core/skills/ast-analysis/rules/go-declarations.yml"
+      }
+    ],
+    "external_mcp": []
+  },
+  "permissions": {
+    "mode": "read_only",
+    "native_tools": ["repository_read", "repository_search", "git_read", "ast_grep", "structural_scan", "submit_review"],
+    "external_mcp": []
+  },
+  "metadata": {
+    "team": "payments",
+    "values": {
+      "environment": "production"
+    }
+  },
+  "labels": {
+    "static": ["ai-review::engine::copilot-cli"],
+    "create_missing": false,
+    "reserved_names": [],
+    "reserved_scopes": [],
+    "dynamic": [
+      {
+        "name": "verdict",
+        "source": "verdict",
+        "mode": "single",
+        "missing": "omit",
+        "values": {
+          "approved": "ai-review::verdict::approved",
+          "needs_review": "ai-review::verdict::needs-review"
+        }
+      },
+      {
+        "name": "coverage",
+        "source": "coverage",
+        "mode": "single",
+        "missing": "unknown",
+        "values": {
+          "complete": "ai-review::coverage::complete",
+          "partial": "ai-review::coverage::partial",
+          "failed": "ai-review::coverage::failed",
+          "excluded_by_policy": "ai-review::coverage::excluded-by-policy",
+          "unknown": "ai-review::coverage::unknown"
+        }
+      },
+      {
+        "name": "requested-models",
+        "source": "requested_models",
+        "mode": "set",
+        "missing": "unknown",
+        "prefix": "ai-review/requested-model/"
+      },
+      {
+        "name": "observed-models",
+        "source": "observed_models",
+        "mode": "set",
+        "missing": "unknown",
+        "prefix": "ai-review/model/"
+      },
+      {
+        "name": "executed-tools",
+        "source": "executed_tools",
+        "mode": "set",
+        "missing": "omit",
+        "prefix": "ai-review/tool/"
+      },
+      {
+        "name": "token-usage",
+        "source": "token_usage",
+        "mode": "single",
+        "missing": "unknown",
+        "values": {
+          "unknown": "ai-review::tokens::unknown"
+        },
+        "token_format": "buckets",
+        "token_buckets": [
+          {"less_than": 50000, "label": "ai-review::tokens::under-50k"},
+          {"less_than": 100000, "label": "ai-review::tokens::50k-100k"},
+          {"label": "ai-review::tokens::100k-plus"}
+        ]
+      },
+      {
+        "name": "team",
+        "source": "team",
+        "mode": "single",
+        "missing": "omit",
+        "values": {
+          "payments": "ai-review::team::payments"
+        }
+      },
+      {
+        "name": "environment",
+        "source": "metadata",
+        "mode": "single",
+        "missing": "omit",
+        "metadata_key": "environment",
+        "values": {
+          "production": "ai-review::environment::production",
+          "staging": "ai-review::environment::staging"
+        }
+      }
+    ]
+  },
+  "diagnostics": {
+    "log_level": "info",
+    "log_tool_calls": false,
+    "log_tool_results": false,
+    "log_reasoning": false,
+    "log_file": "",
+    "dry_run": true
+  }
+}

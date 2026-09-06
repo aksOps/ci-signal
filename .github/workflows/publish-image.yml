@@ -1,0 +1,92 @@
+name: Publish container image
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-container-${{ github.repository }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      image: ${{ steps.publish.outputs.image }}
+      digest: ${{ steps.publish.outputs.digest }}
+      reference: ${{ steps.publish.outputs.reference }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+
+      - name: Build and check image
+        id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          tag="sha-${GITHUB_SHA}"
+          docker build \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --tag "${image}:${tag}" \
+            .
+          ./scripts/check-image.sh "${image}:${tag}"
+          container_id="$(docker create "${image}:${tag}")"
+          docker cp "${container_id}:/usr/local/bin/ast-grep" "$RUNNER_TEMP/ast-grep"
+          docker rm "$container_id"
+          {
+            printf 'image=%s\n' "$image"
+            printf 'tag=%s\n' "$tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run focused checks
+        env:
+          AST_GREP_BIN: ${{ runner.temp }}/ast-grep
+        run: ./scripts/check-local.sh
+
+      - name: Log in to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Publish image
+        id: publish
+        shell: bash
+        env:
+          IMAGE: ${{ steps.build.outputs.image }}
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE}:${TAG}"
+          digest="$(docker buildx imagetools inspect "${IMAGE}:${TAG}" --format '{{.Manifest.Digest}}')"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            docker tag "${IMAGE}:${TAG}" "${IMAGE}:latest"
+            docker push "${IMAGE}:latest"
+          fi
+
+          reference="${IMAGE}@${digest}"
+          {
+            printf 'image=%s\n' "$IMAGE"
+            printf 'digest=%s\n' "$digest"
+            printf 'reference=%s\n' "$reference"
+          } >> "$GITHUB_OUTPUT"
+          printf 'Published image digest: %s\n' "$reference" >> "$GITHUB_STEP_SUMMARY"

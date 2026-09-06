@@ -1,0 +1,21 @@
+id: go-declarations
+language: Go
+rule:
+  any:
+    - all:
+        - kind: function_declaration
+        - has:
+            field: name
+            pattern: $NAME
+    - all:
+        - kind: method_declaration
+        - has:
+            field: name
+            pattern: $NAME
+    - all:
+        - kind: type_spec
+        - has:
+            field: name
+            pattern: $NAME
+severity: hint
+message: declaration $NAME
