@@ -28,6 +28,15 @@ func TestEngineRunUsesPinnedBYOKAndAcceptsStructuredSubmission(t *testing.T) {
 			return sdk.ToolResult{TextResultForLLM: "content", ResultType: "success"}, nil
 		},
 	}})
+	cliDirectory := t.TempDir()
+	cliPath := filepath.Join(cliDirectory, "copilot-runtime")
+	if err := os.WriteFile(cliPath, []byte("fixture runtime"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cliDirectory, "runtime.node"), []byte("fixture node"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine.environment = append(engine.environment, "COPILOT_CLI_PATH="+cliPath)
 	factory.runtime.session = &fakeSession{
 		loadedSkills:  []skillInfo{{Name: "core-review", Path: filepath.Join(fixture.coreSkills, "core-review", "SKILL.md"), Source: "custom"}},
 		invokedSkills: []string{"core-review"},
@@ -69,6 +78,9 @@ func TestEngineRunUsesPinnedBYOKAndAcceptsStructuredSubmission(t *testing.T) {
 	if !ok {
 		t.Fatalf("connection = %T", options.Connection)
 	}
+	if stdio.Path != cliPath {
+		t.Fatalf("runtime path = %q, want %q", stdio.Path, cliPath)
+	}
 	for _, entry := range stdio.Env {
 		if strings.Contains(entry, "provider-secret") || strings.Contains(entry, "gitlab-secret") || strings.Contains(entry, "job-secret") || strings.HasPrefix(entry, "GITHUB_") || strings.HasPrefix(entry, "COPILOT_") {
 			t.Fatalf("credential-bearing child environment entry survived: %q", entry)
@@ -97,6 +109,32 @@ func TestEngineRunUsesPinnedBYOKAndAcceptsStructuredSubmission(t *testing.T) {
 	}
 	if !contains(sessionConfig.AvailableTools, "custom:submit_review") || !contains(sessionConfig.AvailableTools, "custom:repository_read") {
 		t.Fatalf("available tools = %v", sessionConfig.AvailableTools)
+	}
+	permission, err := sessionConfig.OnPermissionRequest(sdk.PermissionRequestCustomTool{ToolName: "submit_review"}, sdk.PermissionInvocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := permission.(*rpc.PermissionDecisionApproveOnce); !ok {
+		t.Fatalf("submit_review permission = %T", permission)
+	}
+	permission, err = sessionConfig.OnPermissionRequest(&sdk.PermissionRequestCustomTool{ToolName: "submit_review"}, sdk.PermissionInvocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := permission.(*rpc.PermissionDecisionApproveOnce); !ok {
+		t.Fatalf("SDK submit_review permission = %T", permission)
+	}
+	for _, request := range []sdk.PermissionRequest{
+		&sdk.PermissionRequestCustomTool{ToolName: "custom:unknown"},
+		&sdk.PermissionRequestShell{},
+	} {
+		permission, err = sessionConfig.OnPermissionRequest(request, sdk.PermissionInvocation{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := permission.(*rpc.PermissionDecisionReject); !ok {
+			t.Fatalf("permission for %T = %T, want rejection", request, permission)
+		}
 	}
 }
 

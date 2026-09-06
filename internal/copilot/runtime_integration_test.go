@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"ci-signal/internal/config"
 
 	sdk "github.com/github/copilot-sdk/go"
 	"github.com/github/copilot-sdk/go/rpc"
@@ -193,22 +196,80 @@ func TestPinnedCLIRuntimeContract(t *testing.T) {
 	}
 }
 
+func TestEnginePinnedCLIRuntimeContract(t *testing.T) {
+	cliPath := os.Getenv("COPILOT_CLI_PATH")
+	if cliPath == "" {
+		t.Skip("set COPILOT_CLI_PATH to the verified Copilot CLI 1.0.83 runtime wrapper")
+	}
+	if info, err := os.Stat(cliPath); err != nil || info.IsDir() {
+		t.Fatalf("COPILOT_CLI_PATH does not name a runtime executable: %v", err)
+	}
+
+	arguments, err := json.Marshal(completeSubmission())
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &responsesFixture{token: "provider-secret", arguments: string(arguments)}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &http.Server{Handler: provider}
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = server.Shutdown(shutdownCtx)
+	})
+
+	fixture := newFixture(t)
+	fixture.config.Limits.SessionTimeout = config.Duration(30 * time.Second)
+	fixture.config.Limits.MaxInputTokens = 4096
+	engine := fixture.engine(t, sdkRuntimeFactory{}, nil)
+	engine.config.Copilot.Provider.Endpoint = "http://" + listener.Addr().String() + "/v1"
+	engine.config.Copilot.Provider.Model = "fixture-model"
+	engine.environment = append(engine.environment, "COPILOT_CLI_PATH="+cliPath)
+
+	result, err := engine.Run(context.Background(), fixture.request())
+	if err != nil {
+		calls, authorized, path := provider.result()
+		t.Fatalf("run review through pinned CLI: %v (provider calls=%d authorized=%v path=%q)", err, calls, authorized, path)
+	}
+	if result.Accepted == nil || result.Accepted.Value.Completion != "complete" {
+		t.Fatalf("accepted submission = %#v", result.Accepted)
+	}
+	if calls, authorized, path := provider.result(); calls != 1 || !authorized || path != "/v1/responses" {
+		t.Fatalf("provider calls=%d authorized=%v path=%q", calls, authorized, path)
+	}
+}
+
 type responsesFixture struct {
 	mu         sync.Mutex
 	calls      int
 	authorized bool
 	path       string
+	token      string
+	arguments  string
 }
 
 func (s *responsesFixture) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	_, _ = io.Copy(io.Discard, io.LimitReader(request.Body, 2<<20))
 	s.mu.Lock()
 	s.calls++
-	s.authorized = request.Header.Get("Authorization") == "Bearer fixture-token"
+	token := s.token
+	if token == "" {
+		token = "fixture-token"
+	}
+	s.authorized = request.Header.Get("Authorization") == "Bearer "+token
 	s.path = request.URL.Path
 	s.mu.Unlock()
+	arguments := s.arguments
+	if arguments == "" {
+		arguments = "{}"
+	}
+	encodedArguments, _ := json.Marshal(arguments)
 	writer.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(writer, `{"id":"resp_1","object":"response","created_at":%d,"status":"completed","error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":128,"model":"fixture-model","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"submit_review","arguments":"{}","status":"completed"}],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":false,"temperature":1,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1,"truncation":"disabled","usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15},"user":null,"metadata":{}}`, time.Now().Unix())
+	fmt.Fprintf(writer, `{"id":"resp_1","object":"response","created_at":%d,"status":"completed","error":null,"incomplete_details":null,"instructions":null,"max_output_tokens":128,"model":"fixture-model","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"submit_review","arguments":%s,"status":"completed"}],"parallel_tool_calls":true,"previous_response_id":null,"reasoning":{"effort":null,"summary":null},"store":false,"temperature":1,"text":{"format":{"type":"text"}},"tool_choice":"auto","tools":[],"top_p":1,"truncation":"disabled","usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":0},"output_tokens":5,"output_tokens_details":{"reasoning_tokens":0},"total_tokens":15},"user":null,"metadata":{}}`, time.Now().Unix(), encodedArguments)
 }
 
 func (s *responsesFixture) result() (int, bool, string) {

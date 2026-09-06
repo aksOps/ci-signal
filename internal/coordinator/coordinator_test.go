@@ -51,6 +51,7 @@ func TestUnchangedAndCheckboxOnlyRerunsAvoidAI(t *testing.T) {
 	}
 
 	state.Findings = []review.Finding{{ID: "finding-1", Category: review.CategoryRisk, Subcategory: review.SubcategoryCorrections, Relationship: review.RelationshipIntroduced, Title: "Regression", Explanation: "Fails", Assessment: review.AssessmentPresent, State: review.FindingOpen, FirstSeenAt: time.Unix(1, 0), LastSeenAt: time.Unix(1, 0)}}
+	state.Runs[0].Verdict = review.VerdictNeedsReview
 	source, err := markdown.NewCodec().Encode(state)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +69,7 @@ func TestUnchangedAndCheckboxOnlyRerunsAvoidAI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.UsedAI || reviewCalls != 0 || publishCalls != 1 || result.State.Findings[0].State != review.FindingAcknowledged || len(result.State.Runs) != 1 {
+	if result.UsedAI || reviewCalls != 0 || publishCalls != 1 || result.Verdict != review.VerdictNeedsReview || result.Completion != review.SubmissionComplete || result.State.Findings[0].State != review.FindingAcknowledged || len(result.State.Runs) != 1 {
 		t.Fatalf("checkbox result=%#v", result)
 	}
 	if len(result.State.Runs[0].Telemetry.Usage) != 1 {
@@ -94,6 +95,53 @@ func TestUnchangedAndCheckboxOnlyRerunsAvoidAI(t *testing.T) {
 	}
 	if len(result.State.Runs[0].Telemetry.Usage) != 1 {
 		t.Fatal("checkbox uncheck lost prior telemetry")
+	}
+}
+
+func TestUnchangedFailedReviewRetriesAIAndPreservesPriorState(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	fingerprint, err := Fingerprint(capture, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := priorState(capture, fingerprint)
+	state.Runs[0].Completion = review.SubmissionPartial
+	state.Runs[0].Verdict = review.VerdictNeedsReview
+	state.Runs[0].Coverage[0] = review.UnitCoverage{UnitID: "unit-1", Outcome: review.CoverageFailed, Explanation: "review session failed"}
+	state.Findings = []review.Finding{{
+		ID: "finding-1", IdentityKey: "stable", Category: review.CategoryRisk, Subcategory: review.SubcategoryReliability,
+		Relationship: review.RelationshipIntroduced, Title: "Prior risk", Explanation: "Still unassessed",
+		AssignedUnits: []review.ReviewUnitID{"unit-1"}, Assessment: review.AssessmentPresent, State: review.FindingOpen,
+		History: []review.FindingEvent{{Kind: review.FindingEventCreated, RunID: "old", At: time.Unix(1, 0)}}, FirstSeenAt: time.Unix(1, 0), LastSeenAt: time.Unix(1, 0),
+	}}
+	reviewCalls := 0
+	hooks := testHooks(capture)
+	hooks.Recover = func(context.Context) (gitlab.Recovery, error) {
+		return gitlab.Recovery{Current: &gitlab.RecoveredReport{NoteID: 4, State: state}}, nil
+	}
+	hooks.Review = func(_ context.Context, request BatchRequest) (copilot.Result, error) {
+		reviewCalls++
+		return acceptedResult("retry-partial", review.Submission{
+			Verdict: review.VerdictNeedsReview, Completion: review.SubmissionPartial,
+			Coverage:    []review.UnitCoverage{{UnitID: request.Units[0].ID, Outcome: review.CoveragePartial, Explanation: "retry incomplete"}},
+			Limitations: []string{"retry incomplete"},
+		}), nil
+	}
+
+	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewCalls != 1 || !result.UsedAI || result.Completion != review.SubmissionPartial || len(result.State.Runs) != 2 {
+		t.Fatalf("retry result=%#v calls=%d", result, reviewCalls)
+	}
+	if result.State.Runs[0].Coverage[0].Outcome != review.CoverageFailed || result.State.Runs[0].Coverage[0].Explanation != "review session failed" {
+		t.Fatalf("prior failed run changed: %#v", result.State.Runs[0])
+	}
+	finding := result.State.Findings[0]
+	if finding.ID != "finding-1" || finding.Assessment != review.AssessmentPresent || finding.State != review.FindingOpen || len(finding.History) != 1 {
+		t.Fatalf("unassessed prior finding changed: %#v", finding)
 	}
 }
 
@@ -223,6 +271,42 @@ func TestAcceptedCheckpointReusedOnlyForIdenticalFingerprint(t *testing.T) {
 	}
 	if reviewCalls != 2 {
 		t.Fatalf("changed fingerprint AI calls=%d", reviewCalls)
+	}
+}
+
+func TestPartialCheckpointIsNotReused(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	reviewCalls := 0
+	failPublish := true
+	hooks := testHooks(capture)
+	hooks.Review = func(_ context.Context, request BatchRequest) (copilot.Result, error) {
+		reviewCalls++
+		if reviewCalls == 1 {
+			return acceptedResult("partial", review.Submission{
+				Verdict: review.VerdictNeedsReview, Completion: review.SubmissionPartial,
+				Coverage:    []review.UnitCoverage{{UnitID: request.Units[0].ID, Outcome: review.CoveragePartial, Explanation: "incomplete"}},
+				Limitations: []string{"incomplete"},
+			}), nil
+		}
+		return completeResult(request.Units), nil
+	}
+	hooks.Publish = func(_ context.Context, request PublicationRequest) (review.State, error) {
+		if failPublish {
+			return review.State{}, errors.New("uncertain create")
+		}
+		return request.State, nil
+	}
+	if _, err := mustCoordinator(t, settings, hooks).Run(context.Background()); err == nil {
+		t.Fatal("first publish succeeded")
+	}
+	failPublish = false
+	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewCalls != 2 || !result.UsedAI || result.Completion != review.SubmissionComplete {
+		t.Fatalf("partial checkpoint retry result=%#v calls=%d", result, reviewCalls)
 	}
 }
 

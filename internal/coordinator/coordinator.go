@@ -80,7 +80,7 @@ func (c *Coordinator) Run(ctx context.Context) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if state.Fingerprint == fingerprint && sameSnapshot(state.Snapshot, capture.Snapshot) {
+	if state.Fingerprint == fingerprint && sameSnapshot(state.Snapshot, capture.Snapshot) && hasReusableReview(state, fingerprint) {
 		state.Sources = referencedSourceRecords(state.Findings, state.Sources)
 		verdict, completion := latestDecision(state)
 		labels, err = c.labels(state, verdict, overallCoverage(latestCoverage(state)))
@@ -300,6 +300,26 @@ func domainSnapshot(value repository.Snapshot) review.Snapshot {
 
 func sameSnapshot(left review.Snapshot, right repository.Snapshot) bool {
 	return left.ID == right.ID && left.BaseCommit == right.BaseCommit && left.HeadCommit == right.HeadCommit
+}
+
+func hasReusableReview(state review.State, fingerprint review.Fingerprint) bool {
+	if len(state.Runs) == 0 {
+		return false
+	}
+	run := state.Runs[len(state.Runs)-1]
+	return run.Fingerprint == fingerprint && run.Completion == review.SubmissionComplete && completeCoverage(run.Coverage)
+}
+
+func completeCoverage(items []review.UnitCoverage) bool {
+	if len(items) == 0 {
+		return false
+	}
+	for _, item := range items {
+		if item.Outcome != review.CoverageComplete && item.Outcome != review.CoverageExcludedByPolicy {
+			return false
+		}
+	}
+	return true
 }
 
 func latestCoverage(state review.State) []review.UnitCoverage {

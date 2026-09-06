@@ -335,7 +335,10 @@ func within(parent, child string) bool {
 
 func (e *Engine) clientOptions(runtimeDirectory string) *sdk.ClientOptions {
 	return &sdk.ClientOptions{
-		Connection:           sdk.StdioConnection{Env: sanitizedEnvironment(e.environment, e.config, e.secrets)},
+		Connection: sdk.StdioConnection{
+			Path: environmentValue(e.environment, "COPILOT_CLI_PATH"),
+			Env:  sanitizedEnvironment(e.environment, e.config, e.secrets),
+		},
 		WorkingDirectory:     runtimeDirectory,
 		BaseDirectory:        e.config.Copilot.HomeDir,
 		UseLoggedInUser:      sdk.Bool(false),
@@ -379,10 +382,10 @@ func (e *Engine) sessionConfig(request RunRequest, tools []sdk.Tool, mcp map[str
 		Provider: &sdk.ProviderConfig{
 			Type:            config.ProviderTypeOpenAI,
 			WireAPI:         config.WireAPIResponses,
-			BaseURL:         config.OllamaCloudEndpoint,
+			BaseURL:         e.config.Copilot.Provider.Endpoint,
 			BearerToken:     e.secrets.ProviderToken.Value(),
-			ModelID:         config.OllamaCloudModel,
-			WireModel:       config.OllamaCloudModel,
+			ModelID:         e.config.Copilot.Provider.Model,
+			WireModel:       e.config.Copilot.Provider.Model,
 			MaxPromptTokens: safeInt(e.config.Limits.MaxInputTokens),
 			MaxOutputTokens: safeInt(e.config.Limits.MaxOutputTokens),
 		},
@@ -479,6 +482,16 @@ func sanitizedEnvironment(environment []string, cfg config.Config, secrets confi
 	return result
 }
 
+func environmentValue(environment []string, name string) string {
+	prefix := name + "="
+	for index := len(environment) - 1; index >= 0; index-- {
+		if strings.HasPrefix(environment[index], prefix) {
+			return strings.TrimPrefix(environment[index], prefix)
+		}
+	}
+	return ""
+}
+
 func sdkLogLevel(level config.LogLevel) string {
 	if level == config.LogWarn {
 		return "warning"
@@ -561,6 +574,12 @@ func (e *Engine) permissionHandler() sdk.PermissionHandlerFunc {
 		case sdk.PermissionRequestCustomTool:
 			if _, ok := native[item.ToolName]; ok && !requiresManagedApproval(item.ManagedApprovalRequired) {
 				return &rpc.PermissionDecisionApproveOnce{}, nil
+			}
+		case *sdk.PermissionRequestCustomTool:
+			if item != nil {
+				if _, ok := native[item.ToolName]; ok && !requiresManagedApproval(item.ManagedApprovalRequired) {
+					return &rpc.PermissionDecisionApproveOnce{}, nil
+				}
 			}
 		case sdk.PermissionRequestMCP:
 			if _, ok := mcp[item.ServerName]; ok && item.ReadOnly && !requiresManagedApproval(item.ManagedApprovalRequired) {

@@ -49,6 +49,9 @@ func (s *checkpointStore) load(fingerprint review.Fingerprint, batchKey string) 
 	if saved.Fingerprint != fingerprint || saved.BatchKey != batchKey || saved.Result.Accepted == nil {
 		return nil, errors.New("review checkpoint is incompatible or incomplete")
 	}
+	if saved.Result.Accepted.Value.Completion != review.SubmissionComplete || !completeCoverage(saved.Result.Accepted.Value.Coverage) {
+		return nil, nil
+	}
 	return &saved.Result, nil
 }
 
