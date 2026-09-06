@@ -17,6 +17,54 @@ import (
 	"ci-signal/internal/review"
 )
 
+func TestGitCommandsAllowValidatedRepositoryWithDifferentOwner(t *testing.T) {
+	fixture := newGitFixture(t)
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrapper := filepath.Join(t.TempDir(), "git")
+	content := fmt.Sprintf("#!/bin/sh\nexport GIT_TEST_ASSUME_DIFFERENT_OWNER=1\nexec %q \"$@\"\n", realGit)
+	if err := os.WriteFile(wrapper, []byte(content), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rule := filepath.Join(t.TempDir(), "rule.yml")
+	if err := os.WriteFile(rule, []byte("id: unused\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repositoryPath := filepath.Join(t.TempDir(), "repository")
+	if err := os.Symlink(fixture.dir, repositoryPath); err != nil {
+		t.Fatal(err)
+	}
+	analyzer, err := NewAnalyzer(Options{
+		RepositoryDir: repositoryPath, GitPath: wrapper, ASTGrepPath: "unused", GoRulePath: rule,
+		MaxMetadataBytes: 4096, MaxASTSourceBytes: 4096, MaxASTOutputBytes: 4096,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Clean(fixture.dir) + "\n"
+
+	t.Run("buffered command", func(t *testing.T) {
+		got, err := analyzer.runGit(context.Background(), 4096, "rev-parse", "--show-toplevel")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Fatalf("repository root = %q, want %q", got, want)
+		}
+	})
+	t.Run("chunked command", func(t *testing.T) {
+		got, err := analyzer.runGitChunk(context.Background(), 0, 4096, "rev-parse", "--show-toplevel")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got.Data) != want || !got.Complete {
+			t.Fatalf("repository root chunk = %#v, want %q", got, want)
+		}
+	})
+}
+
 func TestSnapshotInventoryAndPinnedRetrieval(t *testing.T) {
 	fixture := newGitFixture(t)
 	analyzer := newTestAnalyzer(t, fixture.dir, 2*1024*1024)

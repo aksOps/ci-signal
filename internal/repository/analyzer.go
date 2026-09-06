@@ -77,7 +77,7 @@ func NewAnalyzer(options Options) (*Analyzer, error) {
 }
 
 func (a *Analyzer) gitArgs(arguments ...string) []string {
-	prefix := []string{"--no-pager", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "core.attributesFile=/dev/null"}
+	prefix := []string{"--no-pager", "-c", "safe.directory=" + a.repositoryReal, "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "core.attributesFile=/dev/null"}
 	return append(prefix, arguments...)
 }
 
