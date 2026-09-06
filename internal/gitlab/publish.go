@@ -443,7 +443,7 @@ func (p *Publisher) verifyReport(ctx context.Context, noteID, botID int64, expec
 	if err != nil {
 		return RecoveredReport{}, fmt.Errorf("verify successor report: %w", err)
 	}
-	if note == nil || note.Author.ID != botID || note.System || note.Internal || note.Confidential || note.Body != body {
+	if note == nil || note.Author.ID != botID || note.System || note.Internal || note.Confidential || !sameGitLabNoteBody(note.Body, body) {
 		return RecoveredReport{}, fmt.Errorf("%w: successor report readback differs", ErrPublicationConflict)
 	}
 	state, err := p.codec.Decode(note.Body)
@@ -458,6 +458,15 @@ func (p *Publisher) verifyReport(ctx context.Context, noteID, botID int64, expec
 		return RecoveredReport{}, fmt.Errorf("%w: successor publication metadata differs", ErrPublicationConflict)
 	}
 	return RecoveredReport{NoteID: noteID, Source: note.Body, State: state}, nil
+}
+
+func sameGitLabNoteBody(actual, expected string) bool {
+	if actual == expected {
+		return true
+	}
+	// GitLab note writes may remove the renderer's one terminal line feed.
+	// Keep every other byte under the existing strict readback check.
+	return strings.HasSuffix(expected, "\n") && actual == strings.TrimSuffix(expected, "\n")
 }
 
 func (p *Publisher) findGeneration(ctx context.Context, generation review.PublicationGeneration, predecessorID int64, digest string) (*RecoveredReport, error) {

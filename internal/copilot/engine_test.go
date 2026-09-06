@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,6 +188,44 @@ func TestEngineRejectsMissingBYOKAndSubscriptionAuthentication(t *testing.T) {
 	}
 	if factory.runtime.created != nil {
 		t.Fatal("session was created after subscription authentication was detected")
+	}
+}
+
+func TestEngineLogsSanitizedRuntimeFailure(t *testing.T) {
+	fixture := newFixture(t)
+	factory := &fakeRuntimeFactory{startErr: errors.New("authentication rejected provider-secret gitlab-secret job-secret")}
+	engine := fixture.engine(t, factory, nil)
+
+	stderr, capture, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	originalStderr := os.Stderr
+	t.Cleanup(func() { os.Stderr = originalStderr })
+	os.Stderr = capture
+	_, err := engine.Run(context.Background(), fixture.request())
+	os.Stderr = originalStderr
+	if closeErr := capture.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err == nil || !strings.Contains(err.Error(), "start pinned Copilot CLI") {
+		t.Fatalf("Run() error = %v", err)
+	}
+	raw, readErr := io.ReadAll(stderr)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if closeErr := stderr.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	text := string(raw)
+	if !strings.Contains(text, "start pinned Copilot CLI") || !strings.Contains(text, "authentication rejected [redacted]") {
+		t.Fatalf("diagnostics omitted actionable runtime stage: %s", text)
+	}
+	for _, secret := range []string{"provider-secret", "gitlab-secret", "job-secret"} {
+		if strings.Contains(text, secret) {
+			t.Fatalf("diagnostics leaked %q: %s", secret, text)
+		}
 	}
 }
 
@@ -541,15 +580,19 @@ func partialSubmission() map[string]any {
 }
 
 type fakeRuntimeFactory struct {
-	mu      sync.Mutex
-	options *sdk.ClientOptions
-	runtime *fakeRuntime
+	mu       sync.Mutex
+	options  *sdk.ClientOptions
+	runtime  *fakeRuntime
+	startErr error
 }
 
 func (f *fakeRuntimeFactory) Start(_ context.Context, options *sdk.ClientOptions) (runtimeClient, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.options = options
+	if f.startErr != nil {
+		return nil, f.startErr
+	}
 	if f.runtime == nil {
 		return nil, errors.New("fake runtime is not configured")
 	}

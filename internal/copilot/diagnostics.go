@@ -20,7 +20,7 @@ type diagnostics struct {
 }
 
 func newDiagnostics(settings config.Diagnostics, secrets config.Secrets, additionalSecrets ...string) (*diagnostics, error) {
-	var writer io.Writer = io.Discard
+	var writer io.Writer = os.Stderr
 	var closer io.Closer
 	if settings.LogFile != "" {
 		file, err := os.OpenFile(settings.LogFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
@@ -51,6 +51,13 @@ func (d *diagnostics) Close() error {
 		return fmt.Errorf("close Copilot diagnostics log: %w", err)
 	}
 	return nil
+}
+
+func (d *diagnostics) Error(err error) {
+	if d == nil || err == nil {
+		return
+	}
+	d.logger.Error("Copilot review failed", "error", d.redactor.Text(err.Error()))
 }
 
 func (d *diagnostics) EventToolCall(name, callID string, arguments any) {

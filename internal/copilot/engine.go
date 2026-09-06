@@ -152,6 +152,7 @@ func (e *Engine) Run(ctx context.Context, request RunRequest) (result Result, ru
 		return Result{}, err
 	}
 	defer func() {
+		diagnostics.Error(runErr)
 		if err := diagnostics.Close(); runErr == nil && err != nil {
 			runErr = err
 		}

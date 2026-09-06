@@ -54,6 +54,22 @@ func TestPublishVerificationFailurePreservesPredecessor(t *testing.T) {
 	}
 }
 
+func TestPublishAcceptsGitLabRemovingTerminalLineFeed(t *testing.T) {
+	fixture, publisher, _ := newPublicationFixture(t)
+	fixture.normalizeNoteBody = true
+
+	result, err := publisher.Publish(context.Background(), fixture.publishRequest(fixture.reviewState("normalized"), "generation-normalized", RecoveredReport{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.mu.Lock()
+	body := fixture.notes[result.NoteID].Body
+	fixture.mu.Unlock()
+	if strings.HasSuffix(body, "\n") {
+		t.Fatal("fixture did not reproduce GitLab terminal line-feed normalization")
+	}
+}
+
 func TestPublishReconcilesLateHumanCheckAndUncheckAcrossReplacement(t *testing.T) {
 	fixture, publisher, codec := newPublicationFixture(t)
 	prior := fixture.addReport(t, codec, fixture.reviewState("one"), "generation-one", 0)
@@ -324,6 +340,7 @@ type publicationFixture struct {
 	nextID               int64
 	uncertainCreate      bool
 	corruptSuccessorRead bool
+	normalizeNoteBody    bool
 	lateControl          func(string) string
 	lateApplied          bool
 	replyTo              int64
@@ -426,7 +443,7 @@ func (f *publicationFixture) serveNotes(writer http.ResponseWriter, request *htt
 		}
 		f.createCalls++
 		f.nextID++
-		note := &fixtureNote{ID: f.nextID, Body: input.Body, AuthorID: 5}
+		note := &fixtureNote{ID: f.nextID, Body: f.storedNoteBody(input.Body), AuthorID: 5}
 		f.notes[note.ID] = note
 		if f.uncertainCreate {
 			f.uncertainCreate = false
@@ -473,7 +490,7 @@ func (f *publicationFixture) serveNote(writer http.ResponseWriter, request *http
 			f.t.Fatal(err)
 		}
 		f.updateCalls++
-		note.Body = input.Body
+		note.Body = f.storedNoteBody(input.Body)
 		writeJSON(f.t, writer, http.StatusOK, f.notePayload(note))
 	case http.MethodDelete:
 		assertCredential(f.t, request, CredentialAPIToken)
@@ -483,6 +500,13 @@ func (f *publicationFixture) serveNote(writer http.ResponseWriter, request *http
 	default:
 		f.t.Fatalf("unexpected note method %s", request.Method)
 	}
+}
+
+func (f *publicationFixture) storedNoteBody(body string) string {
+	if f.normalizeNoteBody {
+		return strings.TrimSuffix(body, "\n")
+	}
+	return body
 }
 
 func (f *publicationFixture) notePayload(note *fixtureNote) map[string]any {
