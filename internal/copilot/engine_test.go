@@ -3,6 +3,7 @@ package copilot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -467,6 +468,23 @@ func TestTelemetryRejectsModelOrAuthenticationFallbackAndDeduplicatesUsage(t *te
 			t.Fatalf("Run() error = %v", err)
 		}
 	})
+	t.Run("model mismatch cancellation preserves integrity error", func(t *testing.T) {
+		session := &fakeSession{
+			loadedSkills:              []skillInfo{{Name: "core-review", Path: filepath.Join(fixture.coreSkills, "core-review", "SKILL.md")}},
+			invokedSkills:             []string{"core-review"},
+			observedModel:             "other-model",
+			telemetryBeforeSubmission: true,
+		}
+		factory := &fakeRuntimeFactory{runtime: &fakeRuntime{version: CLIVersion, session: session}}
+		engine := fixture.engine(t, factory, nil)
+		result, err := engine.Run(context.Background(), fixture.request())
+		if err == nil || !strings.Contains(err.Error(), "instead of requested") {
+			t.Fatalf("Run() error = %v", err)
+		}
+		if len(result.Telemetry.ObservedModels) != 1 || result.Telemetry.ObservedModels[0].Model != "other-model" {
+			t.Fatalf("telemetry = %#v", result.Telemetry)
+		}
+	})
 	t.Run("non BYOK", func(t *testing.T) {
 		falseValue := false
 		session := &fakeSession{
@@ -659,16 +677,17 @@ func (r *fakeRuntime) CreateSession(_ context.Context, config *sdk.SessionConfig
 func (r *fakeRuntime) Stop() error { return nil }
 
 type fakeSession struct {
-	config         *sdk.SessionConfig
-	loadedSkills   []skillInfo
-	invokedSkills  []string
-	submissions    []any
-	emitTelemetry  bool
-	duplicateUsage bool
-	observedModel  string
-	isBYOK         *bool
-	block          bool
-	aborted        bool
+	config                    *sdk.SessionConfig
+	loadedSkills              []skillInfo
+	invokedSkills             []string
+	submissions               []any
+	emitTelemetry             bool
+	duplicateUsage            bool
+	observedModel             string
+	isBYOK                    *bool
+	telemetryBeforeSubmission bool
+	block                     bool
+	aborted                   bool
 }
 
 func (s *fakeSession) LoadedSkills(context.Context) ([]skillInfo, error) {
@@ -686,6 +705,12 @@ func (s *fakeSession) SendAndWait(ctx context.Context, _ sdk.MessageOptions) (*s
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
+	if s.telemetryBeforeSubmission {
+		s.emitProviderTelemetry()
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("waiting for session.idle: %w", err)
+		}
+	}
 	tool := s.tool(submitReviewTool)
 	var lastErr error
 	for i, arguments := range s.submissions {
@@ -697,24 +722,31 @@ func (s *fakeSession) SendAndWait(ctx context.Context, _ sdk.MessageOptions) (*s
 			break
 		}
 	}
-	if s.emitTelemetry || s.observedModel != "" || s.isBYOK != nil {
-		model := s.observedModel
-		if model == "" {
-			model = config.OllamaCloudModel
-		}
-		input, output := int64(10), int64(5)
-		byok := true
-		if s.isBYOK != nil {
-			byok = *s.isBYOK
-		}
-		callID := "provider-call-1"
-		usage := &sdk.AssistantUsageData{APICallID: &callID, Model: model, IsByok: &byok, InputTokens: &input, OutputTokens: &output}
-		s.emit("usage-1", usage)
-		if s.duplicateUsage {
-			s.emit("usage-2", usage)
-		}
+	if !s.telemetryBeforeSubmission {
+		s.emitProviderTelemetry()
 	}
 	return &sdk.SessionEvent{}, lastErr
+}
+
+func (s *fakeSession) emitProviderTelemetry() {
+	if !s.emitTelemetry && s.observedModel == "" && s.isBYOK == nil {
+		return
+	}
+	model := s.observedModel
+	if model == "" {
+		model = config.OllamaCloudModel
+	}
+	input, output := int64(10), int64(5)
+	byok := true
+	if s.isBYOK != nil {
+		byok = *s.isBYOK
+	}
+	callID := "provider-call-1"
+	usage := &sdk.AssistantUsageData{APICallID: &callID, Model: model, IsByok: &byok, InputTokens: &input, OutputTokens: &output}
+	s.emit("usage-1", usage)
+	if s.duplicateUsage {
+		s.emit("usage-2", usage)
+	}
 }
 func (s *fakeSession) Abort(context.Context) error { s.aborted = true; return nil }
 func (s *fakeSession) Disconnect() error           { return nil }

@@ -145,6 +145,28 @@ func TestUnchangedFailedReviewRetriesAIAndPreservesPriorState(t *testing.T) {
 	}
 }
 
+func TestFailedReviewPreservesObservedTelemetry(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	hooks := testHooks(capture)
+	hooks.Review = func(context.Context, BatchRequest) (copilot.Result, error) {
+		return copilot.Result{Telemetry: review.Telemetry{
+			RequestedModels: []string{config.OllamaCloudModel},
+			ObservedModels:  []review.ModelObservation{{SessionID: "session-1", Model: "observed-model"}},
+			UsageComplete:   false,
+		}}, errors.New("model integrity failure")
+	}
+
+	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	telemetry := result.State.Runs[len(result.State.Runs)-1].Telemetry
+	if len(telemetry.RequestedModels) != 1 || len(telemetry.ObservedModels) != 1 || telemetry.ObservedModels[0].Model != "observed-model" || telemetry.UsageComplete {
+		t.Fatalf("failed review telemetry = %#v", telemetry)
+	}
+}
+
 func TestContextChangeBatchesAllUnitsAndCrossFileFinding(t *testing.T) {
 	settings := testConfig(t)
 	settings.Limits.MaxUnitsPerSession = 2

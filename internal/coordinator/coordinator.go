@@ -197,6 +197,7 @@ func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findin
 				return
 			}
 			value, err := c.hooks.Review(ctx, BatchRequest{Fingerprint: fingerprint, Snapshot: capture.Snapshot, Guidance: capture.Guidance, Units: execution.batch, Assignment: execution.assignment, Prompt: batchPrompt(execution.batch, len(batches), capture.Context, execution.assignment.Findings, c.config.Tools.StructuralScans), Acceptance: acceptance, Scans: c.config.Tools.StructuralScans})
+			execution.result = &value
 			if err != nil || value.Accepted == nil {
 				execution.failure = "review session failed"
 				return
@@ -205,7 +206,6 @@ func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findin
 				execution.err = err
 				return
 			}
-			execution.result = &value
 		}(&executions[index], index)
 	}
 	wait.Wait()
@@ -213,6 +213,9 @@ func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findin
 	for _, execution := range executions {
 		if execution.err != nil {
 			return nil, nil, review.Telemetry{}, review.VerdictNeedsReview, false, usedAI, execution.err
+		}
+		if execution.result != nil {
+			telemetry = mergeTelemetry(telemetry, execution.result.Telemetry)
 		}
 		if execution.failure != "" || execution.result == nil {
 			complete = false
@@ -229,7 +232,6 @@ func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findin
 			proposed = review.VerdictNeedsReview
 		}
 		coverage = append(coverage, accepted.Coverage...)
-		telemetry = mergeTelemetry(telemetry, execution.result.Telemetry)
 		findings, err = c.reconciler.Reconcile(findings, accepted, review.ReconcileMetadata{RunID: runID, At: c.now().UTC(), NewFindingIDs: stableFindingIDs(*execution.result.Accepted)})
 		if err != nil {
 			return nil, nil, review.Telemetry{}, review.VerdictNeedsReview, false, usedAI, err

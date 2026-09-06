@@ -236,6 +236,9 @@ func (e *Engine) Run(ctx context.Context, request RunRequest) (result Result, ru
 		return Result{}, err
 	}
 	_, sendErr := session.SendAndWait(runCtx, sdk.MessageOptions{Prompt: prompt})
+	if err := collector.integrityError(); err != nil {
+		return e.failedResult(collector), err
+	}
 	if sendErr != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 		abortCtx, abortCancel := context.WithTimeout(context.WithoutCancel(ctx), e.config.Limits.ToolTimeout.Value())
 		_ = session.Abort(abortCtx)
@@ -256,9 +259,6 @@ func (e *Engine) Run(ctx context.Context, request RunRequest) (result Result, ru
 	collector.recordInvokedSkills(invoked)
 	if missing := collector.missingSkills(e.config.Guidance.RequiredSkills); len(missing) != 0 {
 		return e.failedResult(collector), fmt.Errorf("%w: %s", ErrRequiredSkillsNotInvoked, strings.Join(missing, ", "))
-	}
-	if err := collector.integrityError(); err != nil {
-		return e.failedResult(collector), err
 	}
 	accepted := state.result()
 	if accepted == nil {

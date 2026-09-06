@@ -238,6 +238,9 @@ func TestEnginePinnedCLIRuntimeContract(t *testing.T) {
 	if result.Accepted == nil || result.Accepted.Value.Completion != "complete" {
 		t.Fatalf("accepted submission = %#v", result.Accepted)
 	}
+	if len(result.Telemetry.ObservedModels) != 1 || result.Telemetry.ObservedModels[0].Model != "fixture-model" || !result.Telemetry.UsageComplete {
+		t.Fatalf("runtime telemetry = %#v", result.Telemetry)
+	}
 	if calls, authorized, path := provider.result(); calls != 1 || !authorized || path != "/v1/responses" {
 		t.Fatalf("provider calls=%d authorized=%v path=%q", calls, authorized, path)
 	}
