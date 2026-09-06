@@ -23,9 +23,9 @@ The focused test suite verifies these application guarantees without live creden
 - explicit BYOK session configuration, disabled subscription authentication, skill invocation, native tool calls, correction bounds, telemetry integrity, cancellation, and credential redaction through a fake runtime;
 - a real Copilot CLI 1.0.83 protocol exchange through a local OpenAI Responses stub when `COPILOT_CLI_PATH` is supplied;
 - pinned Git snapshots, additions, deletions, renames, cross-file search, bounded continuation, guidance materialization, Go declaration extraction, configured whole-project structural scans, and fallback coverage in temporary repositories;
-- strict `submit_review` validation, accepted-argument persistence, conservative verdict policy, explicit reassessment, and durable source provenance;
+- strict `submit_review` validation, accepted-argument persistence, conservative verdict policy, paired addressed reassessment and code-change acknowledgement, and durable source provenance;
 - Markdown round trips, renderer escaping, checkbox check/uncheck, late human reversal, inert AI-control tampering, and the renderer-produced sample;
-- GitLab credential routing, single fallback, API-only writes, redirect restrictions, pagination failure, targeted label updates, retry recovery, successor verification, note-history preservation, late controls, ownership and binding checks, restricted-source rejection, and report overflow;
+- GitLab credential routing, single fallback, API-only writes, redirect restrictions, pagination failure, targeted label updates, retry recovery, successor verification, versioned state digests with exact historical-report verification, note-history preservation, late controls, ownership and binding checks, restricted-source rejection, and report overflow;
 - API-token-only author classification through GitLab's Users API, including cached human/bot results and fail-closed denied or malformed responses;
 - coordinator fingerprint reuse, changed-context reassessment, bounded batching, cross-file findings, checkpoint recovery, checkbox-only synchronization without AI, partial-review policy, and stale-publication handling.
 
@@ -33,7 +33,7 @@ The local CLI protocol fixture is stronger than a mocked SDK test, but it still 
 
 ## Live verification on 2026-09-06
 
-An authorized, bounded fixture used GitLab 19.4-pre, merge request `!1`, Ollama Cloud, Copilot CLI 1.0.83, and `deepseek-v4-flash:cloud`. All three authorized provider sessions were consumed:
+An authorized, bounded fixture used GitLab 19.4-pre, merge request `!1`, Ollama Cloud, Copilot CLI 1.0.83, and `deepseek-v4-flash:cloud`. The initial allowance of three provider sessions was consumed:
 
 - Session 1, job `16329785758`, started a live provider session but produced no accepted submission. It ended with `waiting for session.idle: context canceled`; the underlying cause and any model, BYOK, budget, or usage detail are unrecoverable from that run. The published report conservatively recorded all nine units as failed.
 - Session 2, job `16329883750`, completed all nine assigned units and published note `3793232786` with two blocker findings. Requested and observed model identities were both exactly `deepseek-v4-flash:cloud`. Eight usage events recorded 102,143 input tokens and 11,872 output tokens. Successful tool events covered `repository_search`, `git_read`, `repository_read`, `ast_grep`, `structural_scan`, and `submit_review`.
@@ -42,7 +42,11 @@ An authorized, bounded fixture used GitLab 19.4-pre, merge request `!1`, Ollama 
 
 Two intervening checkbox controls, jobs `16329896885` and `16329906152`, each ran with `used_ai=false`. They preserved the accepted run and telemetry while recording the finding history transitions from created to checkbox-acknowledged and then checkbox-reopened. Successor report creation, exact readback verification, predecessor retirement, and one-current-report recovery were exercised against the live merge request.
 
-The two successful sessions recorded 302,414 tokens in total. This is only a lower bound for the exercise because session 1 usage was unavailable.
+The two successful sessions in that initial allowance recorded 302,414 tokens in total. This is only a lower bound for the exercise because session 1 usage was unavailable.
+
+A later allowance authorized two additional sessions. Session 4, [job `16330178872`](https://gitlab.com/aksops/ci-signal-test/-/jobs/16330178872), used one of them and completed the single reassessment unit in 22.3 seconds. It used source commit `d28a5b92adad4dbdba084ab08b7b8f25cd918c1f` and image `ghcr.io/aksops/ci-signal@sha256:4a9a53dff3cc98d1ae143e861d0da9ef2568d732e148849e6b6c776689c5b5dd` against unchanged fixture head `7532624f46c01a5476ae7102b86c521b3fe6636e`. Requested and observed model identities were `deepseek-v4-flash:cloud`. Complete usage telemetry recorded 96,274 input tokens and 5,441 output tokens. `repository_read`, `git_read`, `repository_search`, and `submit_review` succeeded.
+
+The sole current [report, note `3793310366`](https://gitlab.com/aksops/ci-signal-test/-/merge_requests/1#note_3793310366), shows Approved, zero open findings, and two acknowledged findings under the collapsible Blocker/Corrections group. Both rows show the AI robot and Addressed tick with no checkboxes. Each finding received an explicit addressed reassessment followed by an `ai_code_change` acknowledgement whose source references occur in that reassessment's evidence. Stable finding IDs, prior runs, and all preceding history, including the human check/uncheck, were preserved. The old report recovered through historical digest verification, its successor uses a `state-v1:` canonical-state digest, and predecessor note `3793255743` was retired.
 
 These findings are model assessments, not deterministic test results. Go declarations used the configured ast-grep extraction. The other five fixture languages used explicit file fallback units; the live run is not evidence of six-language AST support.
 
@@ -51,7 +55,7 @@ These findings are model assessments, not deterministic test results. Go declara
 Repository checks do not perform live Ollama Cloud requests or GitLab mutations. The authorized fixture above does not verify:
 
 - authentication and endpoint behavior on GitLab 18.9 Ultimate EE, including installation-specific job-token permissions;
-- AI acknowledgement and `GET /users/:id` author classification in a live run, because no eligible human non-system note existed;
+- AI discussion acknowledgement and `GET /users/:id` author classification in a live run, because no eligible human non-system note existed;
 - preservation of unrelated existing labels, because the merge request started with none;
 - runner, network, certificate, proxy, and container-platform compatibility outside the tested GitLab 19.4-pre fixture;
 - deterministic finding accuracy across repositories, languages, or repeated model runs.
