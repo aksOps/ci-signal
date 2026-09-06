@@ -167,6 +167,82 @@ func TestFailedReviewPreservesObservedTelemetry(t *testing.T) {
 	}
 }
 
+func TestZeroUnitChangeReassessesPriorFindings(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	fingerprint, err := Fingerprint(capture, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := priorState(capture, fingerprint)
+	state.Findings = []review.Finding{
+		{ID: "finding-1", IdentityKey: "one", Category: review.CategoryBlocker, Subcategory: review.SubcategoryCorrections, Relationship: review.RelationshipIntroduced, Title: "Go regression", Explanation: "The Go path fails.", AssignedUnits: []review.ReviewUnitID{"unit-1"}, Assessment: review.AssessmentPresent, State: review.FindingOpen, History: []review.FindingEvent{{Kind: review.FindingEventCreated, RunID: "old", At: time.Unix(1, 0)}}, FirstSeenAt: time.Unix(1, 0), LastSeenAt: time.Unix(1, 0)},
+		{ID: "finding-2", IdentityKey: "two", Category: review.CategoryBlocker, Subcategory: review.SubcategoryCorrections, Relationship: review.RelationshipIntroduced, Title: "Fallback regression", Explanation: "Fallback source handling fails.", AssignedUnits: []review.ReviewUnitID{"unit-1"}, Assessment: review.AssessmentPresent, State: review.FindingOpen, History: []review.FindingEvent{{Kind: review.FindingEventCreated, RunID: "old", At: time.Unix(1, 0)}}, FirstSeenAt: time.Unix(1, 0), LastSeenAt: time.Unix(1, 0)},
+	}
+	capture.Snapshot.ID = "snapshot-2"
+	capture.Snapshot.HeadCommit = strings.Repeat("c", 40)
+	capture.Context.MergeRequest.DiffRefs.HeadSha = capture.Snapshot.HeadCommit
+	capture.Inventory.SnapshotID = capture.Snapshot.ID
+	capture.Inventory.Units = nil
+
+	reviewCalls := 0
+	hooks := testHooks(capture)
+	hooks.Recover = func(context.Context) (gitlab.Recovery, error) {
+		return gitlab.Recovery{Current: &gitlab.RecoveredReport{NoteID: 4, State: state}}, nil
+	}
+	hooks.Review = func(_ context.Context, request BatchRequest) (copilot.Result, error) {
+		reviewCalls++
+		if len(request.Units) != 1 || request.Units[0].Kind != repository.UnitPackage || request.Units[0].Base != nil || request.Units[0].Head != nil || !strings.HasPrefix(string(request.Units[0].ID), "reassessment:") {
+			t.Fatalf("reassessment units = %#v", request.Units)
+		}
+		if len(request.Assignment.Findings) != 2 || !strings.Contains(request.Prompt, "Go regression") || !strings.Contains(request.Prompt, "Fallback regression") {
+			t.Fatalf("reassessment assignment = %#v prompt=%q", request.Assignment.Findings, request.Prompt)
+		}
+		unitID := request.Units[0].ID
+		return acceptedResult("reassessed", review.Submission{
+			Verdict: review.VerdictApproved, Completion: review.SubmissionComplete,
+			Reassessments: []review.Reassessment{
+				{FindingID: "finding-1", Assessment: review.AssessmentAddressed, Explanation: "The Go path is fixed.", Evidence: []review.Evidence{{Explanation: "Reviewed the corrected implementation."}}, AssignedUnits: []review.ReviewUnitID{unitID}},
+				{FindingID: "finding-2", Assessment: review.AssessmentAddressed, Explanation: "Fallback handling is fixed.", Evidence: []review.Evidence{{Explanation: "Reviewed the corrected implementation."}}, AssignedUnits: []review.ReviewUnitID{unitID}},
+			},
+			Coverage: []review.UnitCoverage{{UnitID: unitID, Outcome: review.CoverageComplete}},
+		}), nil
+	}
+
+	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewCalls != 1 || !result.UsedAI || result.Completion != review.SubmissionComplete || result.Verdict != review.VerdictApproved {
+		t.Fatalf("reassessment result=%#v calls=%d", result, reviewCalls)
+	}
+	for _, finding := range result.State.Findings {
+		if finding.Assessment != review.AssessmentAddressed || len(finding.History) != 2 || finding.History[1].Kind != review.FindingEventReassessed {
+			t.Fatalf("reassessed finding = %#v", finding)
+		}
+	}
+}
+
+func TestZeroUnitWithoutPriorFindingsAvoidsAI(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	capture.Inventory.Units = nil
+	reviewCalls := 0
+	hooks := testHooks(capture)
+	hooks.Review = func(context.Context, BatchRequest) (copilot.Result, error) {
+		reviewCalls++
+		return copilot.Result{}, errors.New("unexpected AI")
+	}
+
+	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewCalls != 0 || result.UsedAI || result.Completion != review.SubmissionPartial || result.Verdict != review.VerdictNeedsReview {
+		t.Fatalf("empty review result=%#v calls=%d", result, reviewCalls)
+	}
+}
+
 func TestContextChangeBatchesAllUnitsAndCrossFileFinding(t *testing.T) {
 	settings := testConfig(t)
 	settings.Limits.MaxUnitsPerSession = 2

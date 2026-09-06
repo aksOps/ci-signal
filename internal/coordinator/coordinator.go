@@ -130,6 +130,9 @@ func (c *Coordinator) Run(ctx context.Context) (Result, error) {
 
 func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findings []review.Finding, fingerprint review.Fingerprint, runID review.RunID, started time.Time) ([]review.Finding, []review.UnitCoverage, review.Telemetry, review.Verdict, bool, bool, error) {
 	units := append([]repository.Unit(nil), capture.Inventory.Units...)
+	if len(units) == 0 && len(findings) != 0 {
+		units = append(units, repository.Unit{ID: reassessmentUnitID(fingerprint), Kind: repository.UnitPackage, Symbol: "prior finding reassessment"})
+	}
 	sort.Slice(units, func(i, j int) bool { return units[i].ID < units[j].ID })
 	if len(units) > c.config.Limits.MaxUnitsPerSession {
 		units = append(units, repository.Unit{ID: integrationUnitID(fingerprint), Kind: repository.UnitPackage, Symbol: "cross-batch integration"})
@@ -196,7 +199,7 @@ func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findin
 				execution.err = err
 				return
 			}
-			value, err := c.hooks.Review(ctx, BatchRequest{Fingerprint: fingerprint, Snapshot: capture.Snapshot, Guidance: capture.Guidance, Units: execution.batch, Assignment: execution.assignment, Prompt: batchPrompt(execution.batch, len(batches), capture.Context, execution.assignment.Findings, c.config.Tools.StructuralScans), Acceptance: acceptance, Scans: c.config.Tools.StructuralScans})
+			value, err := c.hooks.Review(ctx, BatchRequest{Fingerprint: fingerprint, Snapshot: capture.Snapshot, Guidance: capture.Guidance, Units: execution.batch, Assignment: execution.assignment, Prompt: batchPrompt(execution.batch, len(batches), capture.Context, execution.assignment.Findings, findings, c.config.Tools.StructuralScans), Acceptance: acceptance, Scans: c.config.Tools.StructuralScans})
 			execution.result = &value
 			if err != nil || value.Accepted == nil {
 				execution.failure = "review session failed"
@@ -487,7 +490,7 @@ func assignmentKey(units []repository.Unit, findings map[review.FindingID]review
 	return strings.Join(values, "\x00")
 }
 
-func batchPrompt(units []repository.Unit, count int, context gitlab.Context, findings map[review.FindingID]review.KnownFinding, scans []config.StructuralScan) string {
+func batchPrompt(units []repository.Unit, count int, context gitlab.Context, findings map[review.FindingID]review.KnownFinding, findingDetails []review.Finding, scans []config.StructuralScan) string {
 	var builder strings.Builder
 	fmt.Fprintf(&builder, "Assess assigned review units for a %d-batch review. Retrieve evidence with host tools; do not infer completeness from truncation. Assigned units:\n", count)
 	for _, unit := range units {
@@ -504,13 +507,18 @@ func batchPrompt(units []repository.Unit, count int, context gitlab.Context, fin
 	}
 	if len(findings) != 0 {
 		builder.WriteString("\nKnown finding IDs requiring explicit reassessment:\n")
+		details := make(map[review.FindingID]review.Finding, len(findingDetails))
+		for _, finding := range findingDetails {
+			details[finding.ID] = finding
+		}
 		ids := make([]string, 0, len(findings))
 		for id := range findings {
 			ids = append(ids, string(id))
 		}
 		sort.Strings(ids)
 		for _, id := range ids {
-			fmt.Fprintf(&builder, "- %s\n", id)
+			detail := details[review.FindingID(id)]
+			fmt.Fprintf(&builder, "- %s: %s\n  Prior assessment: %s\n", id, detail.Title, detail.Explanation)
 		}
 	}
 	for _, note := range context.Notes {
@@ -669,6 +677,10 @@ func assignFindingBatches(findings []review.Finding, batches [][]repository.Unit
 
 func integrationUnitID(fingerprint review.Fingerprint) review.ReviewUnitID {
 	return review.ReviewUnitID("integration:" + string(fingerprint)[3:19])
+}
+
+func reassessmentUnitID(fingerprint review.Fingerprint) review.ReviewUnitID {
+	return review.ReviewUnitID("reassessment:" + string(fingerprint)[3:19])
 }
 
 func stableFindingIDs(accepted review.AcceptedSubmission) map[int]review.FindingID {
