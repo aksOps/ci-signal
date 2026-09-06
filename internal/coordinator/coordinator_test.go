@@ -688,3 +688,42 @@ func TestKnownFindingHumanReopenConsumesOnlyPriorEvidence(t *testing.T) {
 		t.Fatal("evidence accepted after the human reopen was consumed")
 	}
 }
+
+func TestOnlyExcludedTestsAvoidAIAndReportPolicyCoverage(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	capture.Inventory.Units = nil
+	capture.Inventory.Exclusions = []repository.Exclusion{{Path: "app_test.go", Reason: repository.ExclusionTests, Excluded: true}}
+	hooks := testHooks(capture)
+	hooks.Review = func(context.Context, BatchRequest) (copilot.Result, error) {
+		t.Fatal("excluded tests reached AI")
+		return copilot.Result{}, nil
+	}
+	result, err := mustCoordinator(t, settings, hooks).Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	coverage := result.State.Runs[len(result.State.Runs)-1].Coverage
+	if result.UsedAI || result.Completion != review.SubmissionComplete || len(coverage) != 1 || coverage[0].Outcome != review.CoverageExcludedByPolicy {
+		t.Fatalf("excluded-only result=%#v coverage=%#v", result, coverage)
+	}
+}
+
+func TestExcludedPathsAreNormalizedInReviewFingerprint(t *testing.T) {
+	settings := testConfig(t)
+	capture := testCapture()
+	before, err := Fingerprint(capture, settings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.Repository.ExcludedPaths = []string{"checks", "csharp/Program.cs"}
+	after, err := Fingerprint(capture, settings)
+	if err != nil || before == after {
+		t.Fatalf("exclusions did not change fingerprint: %v", err)
+	}
+	settings.Repository.ExcludedPaths = []string{"csharp/Program.cs", "checks", "checks"}
+	normalized, err := Fingerprint(capture, settings)
+	if err != nil || normalized != after {
+		t.Fatalf("equivalent exclusions changed fingerprint: %v", err)
+	}
+}

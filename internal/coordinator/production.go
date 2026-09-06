@@ -39,7 +39,7 @@ func NewProduction(loaded config.Loaded, logger *slog.Logger) (*Coordinator, err
 		return nil, err
 	}
 	analyzer, err := repository.NewAnalyzer(repository.Options{
-		RepositoryDir: loaded.Config.Repository.ProjectDir, GitPath: loaded.Config.Tools.GitPath,
+		RepositoryDir: loaded.Config.Repository.ProjectDir, ExcludedPaths: loaded.Config.Repository.ExcludedPaths, GitPath: loaded.Config.Tools.GitPath,
 		ASTGrepPath: loaded.Config.Tools.ASTGrepPath, GoRulePath: goRule,
 		MaxMetadataBytes: loaded.Config.Limits.MaxDiffBytes, MaxASTSourceBytes: int64(loaded.Config.Limits.MaxSourceBytes), MaxASTOutputBytes: loaded.Config.Limits.MaxToolOutputBytes,
 	})

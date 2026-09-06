@@ -240,7 +240,7 @@ func (c *Coordinator) reviewBatches(ctx context.Context, capture Capture, findin
 			return nil, nil, review.Telemetry{}, review.VerdictNeedsReview, false, usedAI, err
 		}
 	}
-	if len(batches) == 0 {
+	if len(batches) == 0 && len(coverage) == 0 {
 		complete = false
 	}
 	for _, item := range coverage {

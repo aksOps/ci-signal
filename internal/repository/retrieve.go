@@ -18,6 +18,9 @@ func (a *Analyzer) ReadSource(ctx context.Context, snapshot Snapshot, side Side,
 	if err := a.validateSnapshot(snapshot); err != nil {
 		return EvidenceChunk{}, err
 	}
+	if err := a.validateReviewPath(filePath); err != nil {
+		return EvidenceChunk{}, err
+	}
 	commit, err := snapshot.commit(side)
 	if err != nil {
 		return EvidenceChunk{}, err
@@ -47,14 +50,16 @@ func (a *Analyzer) ReadDiff(ctx context.Context, snapshot Snapshot, filePath str
 	if err := a.validateSnapshot(snapshot); err != nil {
 		return EvidenceChunk{}, err
 	}
-	arguments := []string{"diff", "--no-ext-diff", "--no-textconv", "--find-renames=50%", "--unified=80", snapshot.BaseCommit, snapshot.HeadCommit, "--"}
-	if filePath != "" {
-		cleaned, err := literalPath(filePath)
-		if err != nil {
+	if err := a.validateReviewPath(filePath); err != nil {
+		return EvidenceChunk{}, err
+	}
+	// The tool accepts one file, never a directory or an unbounded full diff.
+	if _, _, err := a.blobObject(ctx, snapshot.HeadCommit, filePath); err != nil {
+		if _, _, baseErr := a.blobObject(ctx, snapshot.BaseCommit, filePath); baseErr != nil {
 			return EvidenceChunk{}, err
 		}
-		arguments = append(arguments, cleaned)
 	}
+	arguments := []string{"diff", "--no-ext-diff", "--no-textconv", "--find-renames=50%", "--unified=80", snapshot.BaseCommit, snapshot.HeadCommit, "--", ":(literal)" + filePath}
 	chunk, err := a.runGitChunk(ctx, offset, limit, arguments...)
 	if err != nil {
 		return EvidenceChunk{}, err
@@ -75,12 +80,16 @@ func (a *Analyzer) Search(ctx context.Context, snapshot Snapshot, side Side, que
 	}
 	arguments := []string{"grep", "-n", "-z", "-I", "-F", "-e", query, commit, "--"}
 	for _, filePath := range paths {
-		cleaned, err := literalPath(filePath)
-		if err != nil {
+		if err := a.validateReviewPath(filePath); err != nil {
 			return EvidenceChunk{}, err
 		}
-		arguments = append(arguments, cleaned)
+		arguments = append(arguments, ":(literal)"+filePath)
 	}
+	excluded, err := a.excludedSearchPaths(ctx, commit)
+	if err != nil {
+		return EvidenceChunk{}, err
+	}
+	arguments = append(arguments, excluded...)
 	chunk, err := a.runGitChunk(ctx, offset, limit, arguments...)
 	if err != nil && strings.Contains(err.Error(), "exit status 1") {
 		chunk = Chunk{Offset: offset, Complete: true, TotalBytes: 0}

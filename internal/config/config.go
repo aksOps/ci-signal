@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -127,7 +128,8 @@ type GitLab struct {
 }
 
 type Repository struct {
-	ProjectDir string `json:"project_dir"`
+	ProjectDir    string   `json:"project_dir"`
+	ExcludedPaths []string `json:"excluded_paths,omitempty"`
 }
 
 type Copilot struct {
@@ -340,6 +342,11 @@ func (c Config) Validate() error {
 	}
 	if !filepath.IsAbs(c.Repository.ProjectDir) {
 		return errors.New("repository.project_dir must be absolute")
+	}
+	for _, excluded := range c.Repository.ExcludedPaths {
+		if excluded == "" || excluded == "." || path.IsAbs(excluded) || path.Clean(excluded) != excluded || strings.HasPrefix(excluded, "../") || strings.ContainsAny(excluded, "\\\x00") || len(excluded) > 1 && excluded[1] == ':' {
+			return fmt.Errorf("repository.excluded_paths entry %q must be a literal repository-relative file or directory", excluded)
+		}
 	}
 	if err := validateCopilot(c.Copilot); err != nil {
 		return err

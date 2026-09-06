@@ -218,3 +218,18 @@ func mapLookup(values map[string]string) LookupEnv {
 		return value, ok
 	}
 }
+
+func TestRepositoryExcludedPathsAreLiteralAndBounded(t *testing.T) {
+	settings := validConfig(t)
+	settings.applyDefaults()
+	settings.Repository.ExcludedPaths = []string{"csharp/Program.cs", "custom-checks"}
+	if err := settings.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{"", ".", "/", "/tmp/tests", "../tests", "src/../tests", "tests/", "C:/tests", "src\\tests", "tests\x00hidden"} {
+		settings.Repository.ExcludedPaths = []string{invalid}
+		if err := settings.Validate(); err == nil || !strings.Contains(err.Error(), "excluded_paths") {
+			t.Errorf("invalid exclusion %q: %v", invalid, err)
+		}
+	}
+}

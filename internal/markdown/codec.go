@@ -504,30 +504,37 @@ func renderFinding(out *strings.Builder, finding review.Finding, acknowledged bo
 }
 
 func renderFindingFormat(out *strings.Builder, finding review.Finding, acknowledged, legacy bool) {
+	prose := func(value string) string {
+		if !legacy && review.ValidateProse(value) != nil {
+			return "Code excerpt omitted; refer to the cited source."
+		}
+		return escape(value)
+	}
 	marker := findingMarker(finding.ID)
 	prefix := "- [ ] "
 	if acknowledged {
 		if finding.Acknowledgement != nil && finding.Acknowledgement.Method != review.AcknowledgementCheckbox {
-			prefix = "- 🤖 "
+			prefix = "- ✅ "
+			if legacy {
+				prefix = "- 🤖 "
+			}
 		} else {
 			prefix = "- [x] "
 		}
 	}
 	if legacy {
-		fmt.Fprintf(out, "%s**%s · %s — %s** %s\n", prefix, categoryLabel(finding.Category), subcategoryLabel(finding.Subcategory), escape(finding.Title), marker)
+		fmt.Fprintf(out, "%s**%s · %s — %s** %s\n", prefix, categoryLabel(finding.Category), subcategoryLabel(finding.Subcategory), prose(finding.Title), marker)
 	} else {
-		fmt.Fprintf(out, "%s**%s** %s\n", prefix, escape(finding.Title), marker)
+		fmt.Fprintf(out, "%s**%s** %s\n", prefix, prose(finding.Title), marker)
 	}
 	if finding.Explanation != "" {
-		fmt.Fprintf(out, "  %s\n", indentMultiline(escape(finding.Explanation), "  "))
+		fmt.Fprintf(out, "  %s\n", indentMultiline(prose(finding.Explanation), "  "))
 	}
-	assessment := escape(humanize(string(finding.Assessment)))
-	if finding.Assessment == review.AssessmentAddressed && !legacy {
-		assessment = "✅ " + assessment
+	if legacy || finding.Assessment != review.AssessmentAddressed {
+		fmt.Fprintf(out, "  - **Assessment:** %s\n", escape(humanize(string(finding.Assessment))))
 	}
-	fmt.Fprintf(out, "  - **Assessment:** %s\n", assessment)
 	for _, evidence := range finding.Evidence {
-		fmt.Fprintf(out, "  - **Evidence:** %s", escape(evidence.Explanation))
+		fmt.Fprintf(out, "  - **Evidence:** %s", prose(evidence.Explanation))
 		if locations := renderLocations(evidence.Locations); locations != "" {
 			fmt.Fprintf(out, " — %s", locations)
 		}

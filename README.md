@@ -91,6 +91,10 @@ Built-in read-only tools are `repository_read`, `repository_search`, `git_read`,
 
 ## Findings and acknowledgements
 
+The review describes consequences and corrective actions in prose. It does not generate code or patches. Code blocks and patch formats are rejected; inline identifiers and source paths remain valid references. This format check cannot classify arbitrary code disguised as ordinary prose.
+
+Test files and test coverage are outside review scope. Conventional test directories and Go, JavaScript, TypeScript, Java, Python, and C# test filenames are excluded from assignments and repository evidence tools. Excluded files are counted as `excluded_by_policy`, not reviewed production units. Unusual test layouts require a trusted `repository.excluded_paths` list of literal repository-relative files or directories, for example `["csharp/Program.cs"]` for a test harness alongside production code. Entries exclude that exact path and its descendants; globs and semantic test detection are not used. Other production files named `Program.cs` remain eligible.
+
 The model submits structured assessments only through `submit_review`. Raw arguments are checked against JSON Schema and domain rules before decoding is trusted. Unknown fields, missing fields, foreign finding/unit/source IDs, invalid enums, checkbox claims by AI, unsupported evidence, incomplete retrieval, and inconsistent coverage are rejected. The model cannot supply persistent finding IDs, run IDs, timestamps, snapshot identity, labels, or publication generations.
 
 The host policy defaults to `blocker`, `risk`, and `question` as gating categories. A present or unknown gating finding prevents approval even after acknowledgement. Info findings alone do not. Incomplete, failed, or stale work cannot approve. `review.exit_policy` controls the process status independently:
@@ -102,7 +106,7 @@ The host policy defaults to `blocker`, `risk`, and `question` as gating categori
 
 The reviewer does not call GitLab's native approval API.
 
-The report uses GitLab Flavored Markdown task lists. An open finding has an unchecked box. A human can check it to acknowledge the finding; the next run moves it to the acknowledged section without a Copilot call. Unchecking a human acknowledgement reopens it the same way. An AI acknowledgement appears with a robot icon and no checkbox. It requires validated human discussion or code-change evidence. Removing the icon or inserting a checkbox does not alter it. A later human reversal takes precedence over an older AI proposal, while the original assessment and history remain available.
+The report uses GitLab Flavored Markdown task lists. An open finding has an unchecked box. A human can check it to acknowledge the finding; the next run moves it to the acknowledged section without a Copilot call. Unchecking a human acknowledgement reopens it the same way. An AI acknowledgement appears with a green tick and no checkbox. Addressed findings omit the redundant assessment row. It requires validated human discussion or code-change evidence. Removing the icon or inserting a checkbox does not alter it. A later human reversal takes precedence over an older AI proposal, while the original assessment and history remain available.
 
 Stable finding identity and versioned canonical state live in HTML comments, so they are hidden from rendered Markdown but visible in note source. Only eligible public GitLab evidence text and attribution can be retained there. Restricted, confidential, internal, system, and bot-owned report text is excluded before prompts, fingerprints, and state.
 

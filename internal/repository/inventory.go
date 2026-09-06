@@ -50,6 +50,23 @@ func (a *Analyzer) Inventory(ctx context.Context, snapshot Snapshot, scope revie
 	packageUnits := make(map[string]struct{})
 	for i := range files {
 		change := &files[i]
+		// A rename across the policy boundary retains only the production side.
+		originalBase := change.BasePath
+		if reason := a.reviewPathExclusion(change.BasePath); reason != "" {
+			result.Exclusions = append(result.Exclusions, Exclusion{Path: change.BasePath, Reason: reason, Excluded: true})
+			change.BasePath = ""
+			change.Kind = ChangeAdded
+		}
+		if reason := a.reviewPathExclusion(change.HeadPath); reason != "" {
+			if change.HeadPath != originalBase {
+				result.Exclusions = append(result.Exclusions, Exclusion{Path: change.HeadPath, Reason: reason, Excluded: true})
+			}
+			change.HeadPath = ""
+			change.Kind = ChangeDeleted
+		}
+		if change.BasePath == "" && change.HeadPath == "" {
+			continue
+		}
 		selectedPath := change.HeadPath
 		selectedSide := SideHead
 		if selectedPath == "" {
@@ -67,10 +84,6 @@ func (a *Analyzer) Inventory(ctx context.Context, snapshot Snapshot, scope revie
 		}
 		if mode == "120000" {
 			result.Exclusions = append(result.Exclusions, Exclusion{Path: selectedPath, Reason: ExclusionSymlink, Excluded: true})
-			continue
-		}
-		if a.isExcludedDirectory(selectedPath) {
-			result.Exclusions = append(result.Exclusions, Exclusion{Path: selectedPath, Reason: ExclusionVendor, Excluded: true})
 			continue
 		}
 		if a.isGenerated(selectedPath) {

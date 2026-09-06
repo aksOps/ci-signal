@@ -93,6 +93,8 @@ type ExclusionReason string
 
 const (
 	ExclusionVendor               ExclusionReason = "vendor"
+	ExclusionTests                ExclusionReason = "tests"
+	ExclusionConfigured           ExclusionReason = "configured"
 	ExclusionGenerated            ExclusionReason = "generated"
 	ExclusionBinary               ExclusionReason = "binary"
 	ExclusionUnsupportedStructure ExclusionReason = "unsupported_structure"

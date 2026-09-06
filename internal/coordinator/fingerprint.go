@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"slices"
 	"sort"
 	"strings"
 
@@ -17,18 +18,19 @@ import (
 const fingerprintVersion = "review-input-v1"
 
 type fingerprintInput struct {
-	Version     string             `json:"version"`
-	Base        string             `json:"base"`
-	Head        string             `json:"head"`
-	Scope       review.Scope       `json:"scope"`
-	MR          fingerprintMR      `json:"mr"`
-	HumanNotes  []fingerprintNote  `json:"human_notes"`
-	Guidance    map[string]string  `json:"guidance"`
-	Provider    config.Provider    `json:"provider"`
-	Limits      fingerprintLimits  `json:"limits"`
-	Tools       fingerprintTools   `json:"tools"`
-	Permissions config.Permissions `json:"permissions"`
-	Gating      []review.Category  `json:"gating"`
+	Version       string             `json:"version"`
+	ExcludedPaths []string           `json:"excluded_paths,omitempty"`
+	Base          string             `json:"base"`
+	Head          string             `json:"head"`
+	Scope         review.Scope       `json:"scope"`
+	MR            fingerprintMR      `json:"mr"`
+	HumanNotes    []fingerprintNote  `json:"human_notes"`
+	Guidance      map[string]string  `json:"guidance"`
+	Provider      config.Provider    `json:"provider"`
+	Limits        fingerprintLimits  `json:"limits"`
+	Tools         fingerprintTools   `json:"tools"`
+	Permissions   config.Permissions `json:"permissions"`
+	Gating        []review.Category  `json:"gating"`
 }
 
 type fingerprintMR struct {
@@ -86,10 +88,13 @@ func Fingerprint(capture Capture, settings config.Config) (review.Fingerprint, e
 	}
 	gating := append([]review.Category(nil), settings.Review.GatingCategories...)
 	sort.Slice(gating, func(i, j int) bool { return gating[i] < gating[j] })
+	excluded := append([]string(nil), settings.Repository.ExcludedPaths...)
+	sort.Strings(excluded)
+	excluded = slices.Compact(excluded)
 	mr := capture.Context.MergeRequest
 	input := fingerprintInput{
 		Version: fingerprintVersion, Base: capture.Snapshot.BaseCommit, Head: capture.Snapshot.HeadCommit,
-		Scope: settings.Review.Scope, HumanNotes: notes, Guidance: guidance,
+		Scope: settings.Review.Scope, ExcludedPaths: excluded, HumanNotes: notes, Guidance: guidance,
 		Provider: settings.Copilot.Provider, Permissions: settings.Permissions, Gating: gating,
 		Limits: fingerprintLimits{
 			OverallTimeout: settings.Limits.OverallTimeout.Value().String(), SessionTimeout: settings.Limits.SessionTimeout.Value().String(), ToolTimeout: settings.Limits.ToolTimeout.Value().String(),

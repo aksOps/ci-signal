@@ -43,16 +43,19 @@ func TestCodecRoundTripCanonicalState(t *testing.T) {
 		disclaimer,
 		statePrefix,
 	)
-	for _, expected := range []string{"- [ ] **Cross\\-file amount regression**", "### ⚠️ Risk", "#### ⚙️ Operational", "- [x] **Retry limit is low**", "### ℹ️ Info", "#### 📘 Info", "- 🤖 **Migration context**", "**Assessment:** ✅ Addressed"} {
+	for _, expected := range []string{"- [ ] **Cross\\-file amount regression**", "### ⚠️ Risk", "#### ⚙️ Operational", "- [x] **Retry limit is low**", "### ℹ️ Info", "#### 📘 Info", "- ✅ **Migration context**"} {
 		if !strings.Contains(source, expected) {
 			t.Fatalf("rendered report missing %q:\n%s", expected, source)
 		}
 	}
+	if strings.Contains(source, "**Assessment:** ✅ Addressed") || strings.Contains(source, "- 🤖 ") {
+		t.Fatal("AI acknowledgement retained redundant visible assessment or robot")
+	}
 	if strings.Contains(source, string(state.Findings[0].ID)) {
 		t.Fatal("finding ID was rendered visibly")
 	}
-	if strings.Count(source, "- [ ] ") != 1 || strings.Count(source, "- [x] ") != 1 || strings.Count(source, "- 🤖 ") != 1 {
-		t.Fatalf("unexpected task/robot controls:\n%s", source)
+	if strings.Count(source, "- [ ] ") != 1 || strings.Count(source, "- [x] ") != 1 || strings.Count(source, "- ✅ ") != 1 {
+		t.Fatalf("unexpected task/AI tick controls:\n%s", source)
 	}
 	if strings.Contains(source, "AI-assisted acknowledgement") {
 		t.Fatal("forbidden AI acknowledgement label rendered")
@@ -183,7 +186,7 @@ func TestAIControlTamperingIsInert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tampered := strings.Replace(source, "- 🤖 ", "- [x] ", 1)
+	tampered := strings.Replace(source, "- ✅ ", "- [x] ", 1)
 	result, changed, err := codec.ReconcileControls(tampered, Canonicalize(state), []Interaction{{SourceRefID: "src_human", Human: true, At: time.Now()}}, time.Now().Add(time.Second))
 	if err != nil {
 		t.Fatalf("ReconcileControls() error = %v", err)
@@ -357,5 +360,21 @@ func TestLegacyPublicationRendererMatchesOriginalGolden(t *testing.T) {
 	// Original sample.md at d8221dbe6e7c5bacaedeb27eebd83317146ad5c0.
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(body))); got != "cd2cc519b0d3f8e0c5bdd3f1d7a5092e8d6aa07cfaea8ce97009704d85bb183e" {
 		t.Fatalf("historical renderer changed: %s", got)
+	}
+}
+
+func TestRendererOmitsHistoricalCodeBlocksWithoutChangingState(t *testing.T) {
+	state := sampleState()
+	state.Findings[0].Explanation = "Replace it with:\n\n```go\nreturn unsafeCall()\n```"
+	source, err := NewCodec().Encode(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(source, "unsafeCall") || !strings.Contains(source, "Code excerpt omitted") {
+		t.Fatal("historical code was shown in the prose report")
+	}
+	decoded, err := NewCodec().Decode(source)
+	if err != nil || decoded.Findings[0].Explanation != state.Findings[0].Explanation {
+		t.Fatal("prose rendering changed durable history")
 	}
 }

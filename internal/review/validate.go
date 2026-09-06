@@ -90,6 +90,34 @@ func requireJSONEOF(decoder *json.Decoder) error {
 }
 
 func validateSubmission(submission Submission, assignment Assignment) error {
+	for _, finding := range submission.Findings {
+		if err := ValidateProse(finding.Title); err != nil {
+			return fmt.Errorf("finding title: %w", err)
+		}
+		if err := ValidateProse(finding.Explanation); err != nil {
+			return fmt.Errorf("finding explanation: %w", err)
+		}
+	}
+	for _, reassessment := range submission.Reassessments {
+		if err := ValidateProse(reassessment.Explanation); err != nil {
+			return fmt.Errorf("reassessment explanation: %w", err)
+		}
+	}
+	for _, transition := range submission.AcknowledgementChanges {
+		if err := ValidateProse(transition.Explanation); err != nil {
+			return fmt.Errorf("acknowledgement explanation: %w", err)
+		}
+	}
+	for _, coverage := range submission.Coverage {
+		if err := ValidateProse(coverage.Explanation); err != nil {
+			return fmt.Errorf("coverage explanation: %w", err)
+		}
+	}
+	for _, limitation := range submission.Limitations {
+		if err := ValidateProse(limitation); err != nil {
+			return fmt.Errorf("limitation: %w", err)
+		}
+	}
 	if err := validateCoverage(submission, assignment); err != nil {
 		return err
 	}
@@ -234,6 +262,9 @@ func validateUnits(references []ReviewUnitID, units map[ReviewUnitID]struct{}) e
 
 func validateEvidence(evidence []Evidence, sources map[SourceReferenceID]SourceReference) error {
 	for i, item := range evidence {
+		if err := ValidateProse(item.Explanation); err != nil {
+			return fmt.Errorf("evidence %d: %w", i, err)
+		}
 		for _, source := range item.SourceRefs {
 			if _, ok := sources[source]; !ok {
 				return fmt.Errorf("evidence %d references foreign source %q", i, source)

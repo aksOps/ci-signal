@@ -52,7 +52,7 @@ func (a *Analyzer) RunStructuralScan(ctx context.Context, snapshot Snapshot, nam
 		if afterPath != "" && filePath <= afterPath {
 			continue
 		}
-		if filepath.Ext(filePath) != ".go" || a.isExcludedDirectory(filePath) || a.isGenerated(filePath) {
+		if filepath.Ext(filePath) != ".go" || a.reviewPathExclusion(filePath) != "" || a.isGenerated(filePath) {
 			continue
 		}
 		mode, binary, err := a.objectClassification(ctx, snapshot, SideHead, filePath)

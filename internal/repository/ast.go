@@ -34,6 +34,9 @@ func (a *Analyzer) ExtractDeclarations(ctx context.Context, snapshot Snapshot, s
 	if err := a.validateSnapshot(snapshot); err != nil {
 		return DeclarationEvidence{}, err
 	}
+	if err := a.validateReviewPath(filePath); err != nil {
+		return DeclarationEvidence{}, err
+	}
 	if strings.ToLower(filepath.Ext(filePath)) != ".go" {
 		return DeclarationEvidence{}, fmt.Errorf("structural extraction is unsupported for %q", filePath)
 	}

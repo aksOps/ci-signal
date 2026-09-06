@@ -35,9 +35,8 @@ Coverage counts accepted outcomes for host-assigned review work, not tests or fu
 
 #### 📘 Info
 
-- 🤖 **Migration context** <!-- ci-signal-finding:Zl9haQ== -->
+- ✅ **Migration context** <!-- ci-signal-finding:Zl9haQ== -->
   A later code change addressed the original observation\.
-  - **Assessment:** ✅ Addressed
 
 </details>
 

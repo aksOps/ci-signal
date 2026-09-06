@@ -22,6 +22,7 @@ type Options struct {
 	MaxASTOutputBytes int
 	GeneratedSuffixes []string
 	ExcludedDirs      []string
+	ExcludedPaths     []string
 }
 
 type Analyzer struct {
@@ -35,6 +36,7 @@ type Analyzer struct {
 	maxASTOutputBytes int
 	generatedSuffixes []string
 	excludedDirs      map[string]struct{}
+	excludedPaths     []string
 }
 
 func NewAnalyzer(options Options) (*Analyzer, error) {
@@ -61,6 +63,11 @@ func NewAnalyzer(options Options) (*Analyzer, error) {
 		}
 		excluded[directory] = struct{}{}
 	}
+	for _, excluded := range options.ExcludedPaths {
+		if _, err := literalPath(excluded); err != nil {
+			return nil, fmt.Errorf("invalid excluded path: %w", err)
+		}
+	}
 	suffixes := append([]string{".gen.go", ".generated.go", ".pb.go"}, options.GeneratedSuffixes...)
 	return &Analyzer{
 		repositoryDir:     filepath.Clean(options.RepositoryDir),
@@ -73,6 +80,7 @@ func NewAnalyzer(options Options) (*Analyzer, error) {
 		maxASTOutputBytes: options.MaxASTOutputBytes,
 		generatedSuffixes: suffixes,
 		excludedDirs:      excluded,
+		excludedPaths:     append([]string(nil), options.ExcludedPaths...),
 	}, nil
 }
 
