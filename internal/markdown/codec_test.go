@@ -1,7 +1,9 @@
 package markdown
 
 import (
+	"crypto/sha256"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -344,5 +346,16 @@ func assertOrder(t *testing.T, source string, values ...string) {
 			t.Fatalf("%q missing or out of order in:\n%s", value, source)
 		}
 		position = next
+	}
+}
+
+func TestLegacyPublicationRendererMatchesOriginalGolden(t *testing.T) {
+	body, err := NewCodec().EncodeLegacyPublication(sampleState())
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Original sample.md at d8221dbe6e7c5bacaedeb27eebd83317146ad5c0.
+	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(body))); got != "cd2cc519b0d3f8e0c5bdd3f1d7a5092e8d6aa07cfaea8ce97009704d85bb183e" {
+		t.Fatalf("historical renderer changed: %s", got)
 	}
 }

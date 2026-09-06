@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -338,6 +340,7 @@ type publicationFixture struct {
 	mu                   sync.Mutex
 	notes                map[int64]*fixtureNote
 	nextID               int64
+	mrIID                int64
 	uncertainCreate      bool
 	corruptSuccessorRead bool
 	normalizeNoteBody    bool
@@ -361,7 +364,7 @@ type fixtureNote struct {
 
 func newPublicationFixture(t *testing.T) (*publicationFixture, *Publisher, *markdown.Codec) {
 	t.Helper()
-	fixture := &publicationFixture{t: t, notes: make(map[int64]*fixtureNote), nextID: 100, codec: markdown.NewCodec()}
+	fixture := &publicationFixture{t: t, notes: make(map[int64]*fixtureNote), nextID: 100, mrIID: 7, codec: markdown.NewCodec()}
 	fixture.server = httptest.NewServer(http.HandlerFunc(fixture.serveHTTP))
 	t.Cleanup(fixture.server.Close)
 	client := newTestClient(t, fixture.server, testJobToken, WithRetryPolicy(0, 0, 0))
@@ -510,7 +513,7 @@ func (f *publicationFixture) storedNoteBody(body string) string {
 }
 
 func (f *publicationFixture) notePayload(note *fixtureNote) map[string]any {
-	return map[string]any{"id": note.ID, "body": note.Body, "internal": note.Internal, "author": map[string]any{"id": note.AuthorID, "username": fmt.Sprintf("user-%d", note.AuthorID)}, "noteable_iid": 7, "project_id": 70}
+	return map[string]any{"id": note.ID, "body": note.Body, "internal": note.Internal, "author": map[string]any{"id": note.AuthorID, "username": fmt.Sprintf("user-%d", note.AuthorID)}, "noteable_iid": f.mrIID, "project_id": 70}
 }
 
 func (f *publicationFixture) reviewState(suffix string) review.State {
@@ -630,4 +633,151 @@ func (f *publicationFixture) resetNotes() {
 	defer f.mu.Unlock()
 	f.notes = make(map[int64]*fixtureNote)
 	f.nextID = 100
+}
+
+func legacyPublicationFixture(t *testing.T) (*publicationFixture, *Publisher, review.State, string) {
+	t.Helper()
+	fixture, publisher, codec := newPublicationFixture(t)
+	body, err := os.ReadFile("testdata/legacy-report.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err := codec.Decode(string(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publisher.client.baseURL = state.MR.BaseURL
+	publisher.client.project = state.MR.Project
+	publisher.client.mrIID = int64(state.MR.MRIID)
+	fixture.mrIID = int64(state.MR.MRIID)
+	fixture.nextID = state.Publication.NoteID
+	fixture.notes[fixture.nextID] = &fixtureNote{ID: fixture.nextID, AuthorID: 5, Body: string(body)}
+	return fixture, publisher, state, string(body)
+}
+
+func TestRecoverAndReplaceHistoricalPublication(t *testing.T) {
+	fixture, publisher, state, original := legacyPublicationFixture(t)
+	recovered, err := publisher.Recover(context.Background())
+	if err != nil || recovered.Current == nil {
+		t.Fatalf("historical recovery = %#v, %v", recovered, err)
+	}
+	legacy, err := fixture.codec.EncodeLegacyPublication(state)
+	if err != nil || !sameGitLabNoteBody(original, legacy) {
+		t.Fatalf("historical renderer differs from original public note: %v", err)
+	}
+	if !reflect.DeepEqual(recovered.Current.State, state) || recovered.Current.Source != original {
+		t.Fatal("recovery altered historical state or controls")
+	}
+	request := fixture.publishRequest(state, "layout-upgrade", *recovered.Current)
+	request.PublishedAt = state.Publication.PublishedAt.Add(time.Hour)
+	request.SourceKinds = map[review.SourceReferenceID]review.SourceReferenceKind{}
+	for id := range findingSourceReferences(state.Findings) {
+		if strings.HasPrefix(string(id), "src_") {
+			request.SourceKinds[id] = review.SourceRepositorySource
+		}
+	}
+	result, err := publisher.Publish(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(result.State.Publication.StateDigest, "state-v1:") || !reflect.DeepEqual(result.State.Findings, state.Findings) || !reflect.DeepEqual(result.State.Runs, state.Runs) {
+		t.Fatal("replacement changed durable findings/history instead of just publication")
+	}
+	if fixture.hasNote(state.Publication.NoteID) || !strings.HasPrefix(fixture.notes[result.NoteID].Body, "## Verdict:") {
+		t.Fatal("historical report was not replaced with current layout")
+	}
+}
+
+func TestResumeHistoricalPublicationKeepsGenerationAndHistory(t *testing.T) {
+	fixture, publisher, state, _ := legacyPublicationFixture(t)
+	recovered, err := publisher.Recover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := fixture.publishRequest(state, state.Publication.Generation, *recovered.Current)
+	resumed, _, created, err := publisher.resumeSuccessor(context.Background(), request, recovered)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created || fixture.createCalls != 0 || resumed.Publication.NoteID != state.Publication.NoteID || resumed.Publication.Generation != state.Publication.Generation || !reflect.DeepEqual(resumed.Findings, state.Findings) {
+		t.Fatal("resume duplicated the generation or changed history")
+	}
+}
+
+func TestRecoveryRejectsHistoricalDigestAndStateTampering(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*review.State)
+	}{
+		{"digest", func(s *review.State) { s.Publication.StateDigest = strings.Repeat("0", 64) }},
+		{"state", func(s *review.State) { s.Findings[0].Explanation += " altered" }},
+		{"unknown version", func(s *review.State) { s.Publication.StateDigest = "state-v99:" + strings.Repeat("0", 64) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture, publisher, state, _ := legacyPublicationFixture(t)
+			test.mutate(&state)
+			body, err := fixture.codec.Encode(state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.notes[state.Publication.NoteID].Body = body
+			if _, err := publisher.Recover(context.Background()); !errors.Is(err, ErrPublicationConflict) {
+				t.Fatalf("tampered recovery error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCanonicalPublicationDigestRejectsStateTampering(t *testing.T) {
+	fixture, publisher, codec := newPublicationFixture(t)
+	report := fixture.addReport(t, codec, fixture.reviewState("state-digest"), "state-digest", 0)
+	if !strings.HasPrefix(report.State.Publication.StateDigest, "state-v1:") {
+		t.Fatal("new publication digest is not versioned")
+	}
+	report.State.Findings[0].Explanation += " altered"
+	body, err := codec.Encode(report.State)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.notes[report.NoteID].Body = body
+	if _, err := publisher.Recover(context.Background()); !errors.Is(err, ErrPublicationConflict) {
+		t.Fatalf("tampered canonical state recovery = %v", err)
+	}
+}
+
+type changedLayoutCodec struct{ *markdown.Codec }
+
+func (c changedLayoutCodec) Encode(state review.State) (string, error) {
+	body, err := c.Codec.Encode(state)
+	return "New presentation\n" + body, err
+}
+
+func TestCanonicalPublicationDigestIgnoresLayout(t *testing.T) {
+	fixture, _, codec := newPublicationFixture(t)
+	state := fixture.reviewState("layout")
+	before, err := calculateStateDigest(codec, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := calculateStateDigest(changedLayoutCodec{codec}, state)
+	if err != nil || before != after {
+		t.Fatalf("layout changed canonical digest: %q %q %v", before, after, err)
+	}
+}
+
+func TestHistoricalReportRetainsHumanCheckboxControl(t *testing.T) {
+	fixture, publisher, state, original := legacyPublicationFixture(t)
+	fixture.notes[state.Publication.NoteID].Body = strings.Replace(original, "- [ ] ", "- [x] ", 1)
+	recovered, err := publisher.Recover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, changed, err := fixture.codec.ReconcileControls(recovered.Current.Source, recovered.Current.State, nil, state.Publication.PublishedAt.Add(time.Hour))
+	if err != nil || !changed {
+		t.Fatalf("historical checkbox reconciliation = %v, %v", changed, err)
+	}
+	finding := updated.Findings[0]
+	if finding.State != review.FindingAcknowledged || finding.Acknowledgement == nil || finding.Acknowledgement.Method != review.AcknowledgementCheckbox || len(finding.History) != len(state.Findings[0].History)+1 || !reflect.DeepEqual(finding.History[:len(finding.History)-1], state.Findings[0].History) {
+		t.Fatal("historical control lost history or became an AI acknowledgement")
+	}
 }

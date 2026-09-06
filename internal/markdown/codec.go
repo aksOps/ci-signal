@@ -500,6 +500,10 @@ func containsFindingGroup(findings []review.Finding, state review.FindingState, 
 }
 
 func renderFinding(out *strings.Builder, finding review.Finding, acknowledged bool) {
+	renderFindingFormat(out, finding, acknowledged, false)
+}
+
+func renderFindingFormat(out *strings.Builder, finding review.Finding, acknowledged, legacy bool) {
 	marker := findingMarker(finding.ID)
 	prefix := "- [ ] "
 	if acknowledged {
@@ -509,12 +513,16 @@ func renderFinding(out *strings.Builder, finding review.Finding, acknowledged bo
 			prefix = "- [x] "
 		}
 	}
-	fmt.Fprintf(out, "%s**%s** %s\n", prefix, escape(finding.Title), marker)
+	if legacy {
+		fmt.Fprintf(out, "%s**%s · %s — %s** %s\n", prefix, categoryLabel(finding.Category), subcategoryLabel(finding.Subcategory), escape(finding.Title), marker)
+	} else {
+		fmt.Fprintf(out, "%s**%s** %s\n", prefix, escape(finding.Title), marker)
+	}
 	if finding.Explanation != "" {
 		fmt.Fprintf(out, "  %s\n", indentMultiline(escape(finding.Explanation), "  "))
 	}
 	assessment := escape(humanize(string(finding.Assessment)))
-	if finding.Assessment == review.AssessmentAddressed {
+	if finding.Assessment == review.AssessmentAddressed && !legacy {
 		assessment = "✅ " + assessment
 	}
 	fmt.Fprintf(out, "  - **Assessment:** %s\n", assessment)

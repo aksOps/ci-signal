@@ -266,9 +266,8 @@ func (p *Publisher) validateRecovered(note *gitlabapi.Note, state review.State) 
 	if publication.NoteID != 0 && publication.NoteID != note.ID {
 		return fmt.Errorf("%w: report note %d claims note %d", ErrPublicationConflict, note.ID, publication.NoteID)
 	}
-	digest, err := calculateStateDigest(p.codec, state)
-	if err != nil || digest != publication.StateDigest {
-		return fmt.Errorf("%w: report note %d has invalid publication digest", ErrPublicationConflict, note.ID)
+	if err := validateStateDigest(p.codec, state); err != nil {
+		return fmt.Errorf("%w: report note %d has invalid publication digest: %v", ErrPublicationConflict, note.ID, err)
 	}
 	return nil
 }
@@ -361,7 +360,8 @@ func (p *Publisher) resumeSuccessor(ctx context.Context, request PublishRequest,
 		return review.State{}, RecoveredReport{}, false, fmt.Errorf("digest resumed report: %w", err)
 	}
 	state.Publication.StateDigest = digest
-	if state.Publication.StateDigest != current.State.Publication.StateDigest {
+	currentDigest, err := calculateStateDigest(p.codec, current.State)
+	if err != nil || state.Publication.StateDigest != currentDigest {
 		return review.State{}, RecoveredReport{}, false, fmt.Errorf("%w: generation %q has different review state", ErrPublicationConflict, request.Generation)
 	}
 	body, err := p.codec.Encode(state)
@@ -736,19 +736,58 @@ func findingSourceReferences(findings []review.Finding) map[review.SourceReferen
 	return result
 }
 
-func calculateStateDigest(codec reportCodec, state review.State) (string, error) {
-	copy := cloneReviewState(state)
+const stateDigestPrefix = "state-v1:"
+
+func publicationDigestState(state review.State) review.State {
+	copy := markdown.Canonicalize(state)
 	if copy.Publication != nil {
 		copy.Publication.NoteID = 0
 		copy.Publication.StateDigest = ""
 		copy.Publication.PublishedAt = time.Time{}
 	}
-	payload, err := codec.Encode(copy)
+	return copy
+}
+
+func calculateStateDigest(codec reportCodec, state review.State) (string, error) {
+	copy := publicationDigestState(state)
+	// Keep codec validation, but exclude presentation from the digest.
+	if _, err := codec.Encode(copy); err != nil {
+		return "", err
+	}
+	payload, err := json.Marshal(copy)
 	if err != nil {
 		return "", err
 	}
+	digest := sha256.Sum256(payload)
+	return stateDigestPrefix + hex.EncodeToString(digest[:]), nil
+}
+
+func validateStateDigest(codec reportCodec, state review.State) error {
+	stored := state.Publication.StateDigest
+	if strings.HasPrefix(stored, stateDigestPrefix) {
+		digest, err := calculateStateDigest(codec, state)
+		if err != nil {
+			return err
+		}
+		if digest != stored {
+			return errors.New("canonical publication digest mismatch")
+		}
+		return nil
+	}
+	// Unprefixed SHA-256 is the historical rendered-report format. Verify the
+	// exact original renderer, never substitute the current layout or skip it.
+	if raw, err := hex.DecodeString(stored); err != nil || len(raw) != sha256.Size {
+		return errors.New("unsupported publication digest version")
+	}
+	payload, err := markdown.NewCodec().EncodeLegacyPublication(publicationDigestState(state))
+	if err != nil {
+		return err
+	}
 	digest := sha256.Sum256([]byte(payload))
-	return hex.EncodeToString(digest[:]), nil
+	if hex.EncodeToString(digest[:]) != stored {
+		return errors.New("historical publication digest mismatch")
+	}
+	return nil
 }
 
 func cloneReviewState(state review.State) review.State {
