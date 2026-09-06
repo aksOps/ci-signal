@@ -13,7 +13,7 @@
 
 The pinned Linux x86_64 ast-grep archive SHA256 is `f8ac830881339d1edee6b2652f54798c0f4da5a827f2db38a08ee31117783ce8`. The pinned Linux x64 Copilot CLI archive SHA256 is `888f8fbb4575c335afba4a8863c647ef04f81e5124c7c794bdcaee90c5fa4503`. Image construction verifies the appropriate archive before extraction.
 
-The selected Go dependencies use compatible OSI licenses: Copilot Go SDK and Goldmark are MIT; GitLab API client-go and `jsonschema` are Apache-2.0. The project pins versions in [go.mod](../go.mod) and [go.sum](../go.sum).
+The selected Go dependencies use compatible OSI licenses: Copilot Go SDK and Goldmark are MIT; GitLab API client-go and `jsonschema` are Apache-2.0. The project pins versions in [go.mod](../go.mod) and [go.sum](../go.sum). The bundled Copilot CLI has its own redistribution license, retained in the image at `/opt/copilot/LICENSE.md`, and is not covered by this project's MIT License.
 
 ## Verified with local fixtures
 
@@ -29,20 +29,34 @@ The focused test suite verifies these application guarantees without live creden
 - API-token-only author classification through GitLab's Users API, including cached human/bot results and fail-closed denied or malformed responses;
 - coordinator fingerprint reuse, changed-context reassessment, bounded batching, cross-file findings, checkpoint recovery, checkbox-only synchronization without AI, partial-review policy, and stale-publication handling.
 
-The local CLI protocol fixture is stronger than a mocked SDK test, but it still uses a local Responses server. It is not evidence that Ollama Cloud accepted the model, that provider usage events are exposed in production, or that a GitLab 18.9 instance accepted the final requests.
+The local CLI protocol fixture is stronger than a mocked SDK test, but it still uses a local Responses server. By itself, it is not evidence that Ollama Cloud accepted the model, that provider usage events are exposed in production, or that a GitLab instance accepted the final requests.
 
-## Unverified live compatibility
+## Live verification on 2026-09-06
 
-No live Ollama Cloud request or GitLab mutation is performed by the repository checks. Until an operator explicitly authorizes a target, credentials, and bounded provider spend, these remain unverified:
+An authorized, bounded fixture used GitLab 19.4-pre, merge request `!1`, Ollama Cloud, Copilot CLI 1.0.83, and `deepseek-v4-flash:cloud`. All three authorized provider sessions were consumed:
 
-- availability and tool-calling behavior of `deepseek-v4-flash:cloud` through Ollama Cloud at run time;
-- Ollama Cloud usage/model telemetry exposed through Copilot CLI 1.0.83;
-- authentication and endpoint behavior on the operator's GitLab 18.9 Ultimate EE instance, including installation-specific job-token permissions;
-- access to `GET /users/:id` for public-note author classification with the supplied API token;
-- creation, verification, late-control reconciliation, deletion, and label synchronization against a real merge request;
-- runner, network, certificate, proxy, and container-platform compatibility in the target GitLab installation.
+- Session 1, job `16329785758`, started a live provider session but produced no accepted submission. It ended with `waiting for session.idle: context canceled`; the underlying cause and any model, BYOK, budget, or usage detail are unrecoverable from that run. The published report conservatively recorded all nine units as failed.
+- Session 2, job `16329883750`, completed all nine assigned units and published note `3793232786` with two blocker findings. Requested and observed model identities were both exactly `deepseek-v4-flash:cloud`. Eight usage events recorded 102,143 input tokens and 11,872 output tokens. Successful tool events covered `repository_search`, `git_read`, `repository_read`, `ast_grep`, `structural_scan`, and `submit_review`.
+- After the preceding task-related fixes, a zero-diff control correctly avoided AI but exposed that two prior findings were not scheduled for reassessment. The coordinator now creates one pathless, host-owned reassessment unit when prior findings exist and the changed snapshot has no eligible diff units.
+- Session 3, job `16329956406`, completed that reassessment unit in 127.9 seconds. Both persistent findings retained stable IDs and an open workflow state while their assessment moved from `present` to `addressed` through explicit, source-backed reassessments. No AI acknowledgement was proposed. Note `3793255743` was approved with complete coverage. Requested and observed model identities again matched exactly. Fourteen usage events recorded 174,092 input tokens and 14,307 output tokens. `git_read`, `repository_read`, `structural_scan`, and `submit_review` succeeded; one `repository_search` attempt failed before a later search succeeded.
 
-The reviewer reports absent provider telemetry as unknown. It reports denied or incomplete GitLab context as an error rather than an empty history. Fixture success must not be described as live GitLab 18.9 or live Ollama Cloud verification.
+Two intervening checkbox controls, jobs `16329896885` and `16329906152`, each ran with `used_ai=false`. They preserved the accepted run and telemetry while recording the finding history transitions from created to checkbox-acknowledged and then checkbox-reopened. Successor report creation, exact readback verification, predecessor retirement, and one-current-report recovery were exercised against the live merge request.
+
+The two successful sessions recorded 302,414 tokens in total. This is only a lower bound for the exercise because session 1 usage was unavailable.
+
+These findings are model assessments, not deterministic test results. Go declarations used the configured ast-grep extraction. The other five fixture languages used explicit file fallback units; the live run is not evidence of six-language AST support.
+
+## Remaining unverified compatibility
+
+Repository checks do not perform live Ollama Cloud requests or GitLab mutations. The authorized fixture above does not verify:
+
+- authentication and endpoint behavior on GitLab 18.9 Ultimate EE, including installation-specific job-token permissions;
+- AI acknowledgement and `GET /users/:id` author classification in a live run, because no eligible human non-system note existed;
+- preservation of unrelated existing labels, because the merge request started with none;
+- runner, network, certificate, proxy, and container-platform compatibility outside the tested GitLab 19.4-pre fixture;
+- deterministic finding accuracy across repositories, languages, or repeated model runs.
+
+The reviewer reports absent provider telemetry as unknown. It reports denied or incomplete GitLab context as an error rather than an empty history. Local fixture success must not be described as live verification. The authorized live result above verifies Ollama Cloud and GitLab 19.4-pre only; it is not GitLab 18.9 evidence.
 
 AI discussion acknowledgement is limited to authors confirmed through GitLab 18.9's `GET /users/:id` response. The reviewer retains only the resulting `human`, `bot`, or `unknown` classification in review context. A missing `bot` field, a denied lookup, or another lookup failure produces `unknown`; the public discussion remains available for ordinary review context but cannot support an AI discussion acknowledgement. These lookups use only `GITLAB_API_TOKEN` and are cached for the current job.
 
