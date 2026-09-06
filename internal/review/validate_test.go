@@ -2,10 +2,38 @@ package review
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 )
+
+func TestSubmissionRejectionReasonOmitsSubmittedValues(t *testing.T) {
+	secret := "private\"quoted\\value\nwith another line"
+	raw, err := json.Marshal(map[string]any{
+		"verdict": "approved", "completion": "complete",
+		"findings": []any{map[string]any{
+			"category": "risk", "subcategory": "corrections", "relationship": "introduced", "title": "Regression", "explanation": "Implementation issue.", "assigned_units": []string{"unit-1"},
+			"evidence": []any{map[string]any{"explanation": "Pinned source.", "source_refs": []string{"change-1"}, "locations": []any{map[string]any{"path": "../" + secret}}}},
+		}},
+		"reassessments": []any{}, "acknowledgement_changes": []any{}, "limitations": []any{},
+		"coverage": []any{map[string]any{"unit_id": "unit-1", "outcome": "complete"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mustValidator(t).Validate(raw, testAssignment())
+	if got := SubmissionRejectionReason(err); got != "finding 0: evidence 0 location 0: path [value] is not a repository-relative literal path" {
+		t.Fatalf("unsafe or unhelpful rejection: %q", got)
+	}
+	if got := SubmissionRejectionReason(fmt.Errorf("persist rejected arguments: %s", secret)); got != "submission acceptance failed" {
+		t.Fatalf("non-validation error exposed: %q", got)
+	}
+	var rejection *submissionRejection
+	if !errors.As(err, &rejection) || !strings.Contains(rejection.Error(), "private") {
+		t.Fatal("model correction error lost its original validation details")
+	}
+}
 
 func TestValidatorAcceptsCompleteSubmissionWithoutFindings(t *testing.T) {
 	validator := mustValidator(t)

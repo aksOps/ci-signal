@@ -247,7 +247,7 @@ func (e *Engine) Run(ctx context.Context, request RunRequest) (result Result, ru
 	}
 	if sendErr != nil && !state.accepted() {
 		if state.correctionsExhausted() {
-			return e.failedResult(collector), fmt.Errorf("%w: %v", ErrCorrectionBudgetExhausted, sendErr)
+			return e.failedResult(collector), state.correctionError()
 		}
 		return e.failedResult(collector), fmt.Errorf("run Copilot review session: %w", sendErr)
 	}
@@ -263,7 +263,7 @@ func (e *Engine) Run(ctx context.Context, request RunRequest) (result Result, ru
 	accepted := state.result()
 	if accepted == nil {
 		if state.correctionsExhausted() {
-			return e.failedResult(collector), ErrCorrectionBudgetExhausted
+			return e.failedResult(collector), state.correctionError()
 		}
 		return e.failedResult(collector), ErrNoAcceptedSubmission
 	}
@@ -622,6 +622,7 @@ type submissionState struct {
 	metadata       review.AcceptanceMetadata
 	maxCorrections int
 	corrections    int
+	lastRejection  string
 	acceptedValue  *review.AcceptedSubmission
 	collector      *eventCollector
 	cancel         context.CancelFunc
@@ -650,6 +651,7 @@ func (s *submissionState) submit(invocation sdk.ToolInvocation) (sdk.ToolResult,
 		err = acceptErr
 	}
 	s.corrections++
+	s.lastRejection = review.SubmissionRejectionReason(err)
 	if s.corrections >= s.maxCorrections {
 		s.cancel()
 		return sdk.ToolResult{}, fmt.Errorf("%w: %v", ErrCorrectionBudgetExhausted, err)
@@ -671,6 +673,12 @@ func (s *submissionState) correctionsExhausted() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.corrections >= s.maxCorrections
+}
+
+func (s *submissionState) correctionError() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return fmt.Errorf("%w: last rejection: %s", ErrCorrectionBudgetExhausted, s.lastRejection)
 }
 
 func (e *Engine) sessionTools(state *submissionState, diagnostics *diagnostics) ([]sdk.Tool, error) {

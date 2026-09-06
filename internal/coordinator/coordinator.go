@@ -515,6 +515,7 @@ func batchPrompt(units []repository.Unit, count int, context gitlab.Context, fin
 	}
 	if len(findings) != 0 {
 		builder.WriteString("\nKnown finding IDs requiring explicit reassessment:\n")
+		builder.WriteString("An open finding reassessed addressed requires a paired ai_code_change acknowledgement using the same fresh source evidence. An already acknowledged finding requires reassessment only unless new evidence supports reopening it; do not acknowledge it again. Consumed source references cannot support a new acknowledgement.\n")
 		details := make(map[review.FindingID]review.Finding, len(findingDetails))
 		for _, finding := range findingDetails {
 			details[finding.ID] = finding
@@ -526,7 +527,19 @@ func batchPrompt(units []repository.Unit, count int, context gitlab.Context, fin
 		sort.Strings(ids)
 		for _, id := range ids {
 			detail := details[review.FindingID(id)]
-			fmt.Fprintf(&builder, "- %s: %s\n  Prior assessment: %s\n", id, detail.Title, detail.Explanation)
+			known := findings[review.FindingID(id)]
+			fmt.Fprintf(&builder, "- %s: %s\n  Workflow state: %s\n  Prior assessment: %s\n", id, detail.Title, known.State, detail.Explanation)
+			if known.Acknowledgement != nil {
+				fmt.Fprintf(&builder, "  Acknowledgement method: %s\n", known.Acknowledgement.Method)
+			}
+			if len(known.ConsumedSourceRefs) != 0 {
+				refs := make([]string, 0, len(known.ConsumedSourceRefs))
+				for ref := range known.ConsumedSourceRefs {
+					refs = append(refs, string(ref))
+				}
+				sort.Strings(refs)
+				fmt.Fprintf(&builder, "  Consumed source references: %s\n", strings.Join(refs, ", "))
+			}
 		}
 	}
 	for _, note := range context.Notes {

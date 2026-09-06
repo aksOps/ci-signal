@@ -677,17 +677,18 @@ func (r *fakeRuntime) CreateSession(_ context.Context, config *sdk.SessionConfig
 func (r *fakeRuntime) Stop() error { return nil }
 
 type fakeSession struct {
-	config                    *sdk.SessionConfig
-	loadedSkills              []skillInfo
-	invokedSkills             []string
-	submissions               []any
-	emitTelemetry             bool
-	duplicateUsage            bool
-	observedModel             string
-	isBYOK                    *bool
-	telemetryBeforeSubmission bool
-	block                     bool
-	aborted                   bool
+	config                     *sdk.SessionConfig
+	loadedSkills               []skillInfo
+	invokedSkills              []string
+	submissions                []any
+	emitTelemetry              bool
+	duplicateUsage             bool
+	observedModel              string
+	isBYOK                     *bool
+	telemetryBeforeSubmission  bool
+	cancelMasksSubmissionError bool
+	block                      bool
+	aborted                    bool
 }
 
 func (s *fakeSession) LoadedSkills(context.Context) ([]skillInfo, error) {
@@ -724,6 +725,9 @@ func (s *fakeSession) SendAndWait(ctx context.Context, _ sdk.MessageOptions) (*s
 	}
 	if !s.telemetryBeforeSubmission {
 		s.emitProviderTelemetry()
+	}
+	if s.cancelMasksSubmissionError && ctx.Err() != nil {
+		return nil, fmt.Errorf("waiting for session.idle: %w", ctx.Err())
 	}
 	return &sdk.SessionEvent{}, lastErr
 }
@@ -771,4 +775,36 @@ func contains(values []string, wanted string) bool {
 		}
 	}
 	return false
+}
+
+func TestCorrectionExhaustionRetainsSafeRejectionWhenSDKReturnsCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name, want string
+		mutate     func(map[string]any)
+	}{
+		{"prose", "finding explanation: review text must be a prose summary without code blocks", func(value map[string]any) {
+			value["findings"] = []any{map[string]any{"category": "risk", "subcategory": "corrections", "relationship": "introduced", "title": "Regression", "explanation": "```go\nprovider-secret\n```", "evidence": []any{map[string]any{"explanation": "Pinned implementation.", "source_refs": []any{"source-1"}}}, "assigned_units": []any{"unit-1"}}}
+		}},
+		{"schema", "schema validation", func(value map[string]any) { value["verdict"] = "provider-secret" }},
+		{"foreign unit", "references foreign unit", func(value map[string]any) {
+			value["coverage"] = []any{map[string]any{"unit_id": "provider-secret", "outcome": "complete"}}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newFixture(t)
+			value := completeSubmission()
+			test.mutate(value)
+			first := completeSubmission()
+			first["coverage"] = []any{}
+			session := &fakeSession{loadedSkills: []skillInfo{{Name: "core-review", Path: filepath.Join(fixture.coreSkills, "core-review", "SKILL.md")}}, invokedSkills: []string{"core-review"}, submissions: []any{first, value}, cancelMasksSubmissionError: true}
+			factory := &fakeRuntimeFactory{runtime: &fakeRuntime{version: CLIVersion, session: session}}
+			_, err := fixture.engine(t, factory, nil).Run(context.Background(), fixture.request())
+			if !errors.Is(err, ErrCorrectionBudgetExhausted) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("exhaustion omitted rejection reason: %v", err)
+			}
+			if strings.Contains(err.Error(), "provider-secret") || strings.Contains(err.Error(), "```go") {
+				t.Fatal("exhaustion exposed rejected argument contents")
+			}
+		})
+	}
 }

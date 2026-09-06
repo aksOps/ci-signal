@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"regexp"
 	"strings"
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
@@ -21,6 +22,28 @@ const submissionSchemaURL = "https://ci-signal.local/schema/submit-review-v1.jso
 type Validator struct {
 	schema *jsonschema.Schema
 }
+
+// Rejection reasons may reach public run summaries. Keep submitted values in the
+// error returned to the model, but exclude them from the diagnostic summary.
+type submissionRejection struct {
+	cause  error
+	reason string
+}
+
+func (e *submissionRejection) Error() string { return e.cause.Error() }
+func (e *submissionRejection) Unwrap() error { return e.cause }
+
+func SubmissionRejectionReason(err error) string {
+	var rejection *submissionRejection
+	if errors.As(err, &rejection) {
+		return rejection.reason
+	}
+	return "submission acceptance failed"
+}
+
+// Domain validation formats all submitted values with %q. Strip those values,
+// including escaped quotes and newlines, before retaining a public reason.
+var quotedValidationValue = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 
 func NewValidator() (*Validator, error) {
 	document, err := SubmissionSchema()
@@ -59,7 +82,17 @@ func (v *Validator) Validate(raw []byte, assignment Assignment) (Submission, err
 		return Submission{}, fmt.Errorf("decode submit_review arguments: %w", err)
 	}
 	if err := v.schema.Validate(document); err != nil {
-		return Submission{}, fmt.Errorf("submit_review schema validation: %w", err)
+		reason := "submit_review schema validation failed"
+		var validation *jsonschema.ValidationError
+		if errors.As(err, &validation) {
+			for len(validation.Causes) != 0 {
+				validation = validation.Causes[0]
+			}
+			// Keyword paths come from the trusted schema; instance locations and
+			// localized error messages can contain submitted keys or values.
+			reason += ": " + strings.Join(validation.ErrorKind.KeywordPath(), "/")
+		}
+		return Submission{}, &submissionRejection{cause: fmt.Errorf("submit_review schema validation: %w", err), reason: reason}
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(raw))
@@ -72,7 +105,7 @@ func (v *Validator) Validate(raw []byte, assignment Assignment) (Submission, err
 		return Submission{}, err
 	}
 	if err := validateSubmission(submission, assignment); err != nil {
-		return Submission{}, err
+		return Submission{}, &submissionRejection{cause: err, reason: quotedValidationValue.ReplaceAllString(err.Error(), "[value]")}
 	}
 	return submission, nil
 }

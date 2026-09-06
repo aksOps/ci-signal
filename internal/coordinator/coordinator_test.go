@@ -727,3 +727,37 @@ func TestExcludedPathsAreNormalizedInReviewFingerprint(t *testing.T) {
 		t.Fatalf("equivalent exclusions changed fingerprint: %v", err)
 	}
 }
+
+func TestKnownWorkflowStateChangesPromptAndAcknowledgementContract(t *testing.T) {
+	open := review.Finding{ID: "finding-1", Title: "Regression", Explanation: "The code is fixed.", Assessment: review.AssessmentAddressed, State: review.FindingOpen}
+	acknowledged := open
+	acknowledged.State = review.FindingAcknowledged
+	acknowledged.Acknowledgement = &review.Acknowledgement{Method: review.AcknowledgementAICodeChange}
+	prompt := func(finding review.Finding) string {
+		return batchPrompt(nil, 1, gitlab.Context{}, map[review.FindingID]review.KnownFinding{finding.ID: knownFinding(finding)}, []review.Finding{finding}, nil)
+	}
+	if prompt(open) == prompt(acknowledged) {
+		t.Fatal("different acknowledgement contracts receive identical model context")
+	}
+	if !strings.Contains(prompt(acknowledged), "acknowledged") || !strings.Contains(prompt(acknowledged), "ai_code_change") {
+		t.Fatal("prompt omits known workflow state or method")
+	}
+	validator, err := review.NewValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, finding := range []review.Finding{open, acknowledged} {
+		submission := review.Submission{Verdict: review.VerdictApproved, Completion: review.SubmissionComplete, Findings: []review.SubmittedFinding{}, Reassessments: []review.Reassessment{{FindingID: finding.ID, Assessment: review.AssessmentAddressed, Explanation: "The implementation is fixed.", Evidence: []review.Evidence{{Explanation: "Pinned source confirms the fix.", SourceRefs: []review.SourceReferenceID{"fresh"}}}, AssignedUnits: []review.ReviewUnitID{"unit-1"}}}, AcknowledgementChanges: []review.AcknowledgementTransition{}, Coverage: []review.UnitCoverage{{UnitID: "unit-1", Outcome: review.CoverageComplete}}, Limitations: []string{}}
+		if finding.State == review.FindingOpen {
+			submission.AcknowledgementChanges = []review.AcknowledgementTransition{{FindingID: finding.ID, Action: review.AcknowledgementActionAcknowledge, Method: review.AcknowledgementAICodeChange, Explanation: "The source addresses the finding.", SourceRefs: []review.SourceReferenceID{"fresh"}}}
+		}
+		raw, err := json.Marshal(submission)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assignment := review.Assignment{UnitIDs: map[review.ReviewUnitID]struct{}{"unit-1": {}}, Findings: map[review.FindingID]review.KnownFinding{finding.ID: knownFinding(finding)}, SourceRefs: map[review.SourceReferenceID]review.SourceReference{"fresh": {ID: "fresh", Kind: review.SourceRepositorySource}}}
+		if _, err := validator.Validate(raw, assignment); err != nil {
+			t.Fatalf("appropriate %s proposal rejected: %v", finding.State, err)
+		}
+	}
+}
